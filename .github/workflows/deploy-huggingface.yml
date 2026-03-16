@@ -9,8 +9,6 @@ on:
 jobs:
   deploy-public-space:
     runs-on: ubuntu-latest
-    env:
-      HF_SOURCE_DIR: ${{ runner.temp }}/pr-size-labeler-huggingface-space
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -24,6 +22,11 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           HUGGINGFACE_SPACE_VAR: ${{ vars.HUGGINGFACE_SPACE }}
         run: |
+          if [ -z "$RUNNER_TEMP" ]; then
+            echo "::error title=Missing RUNNER_TEMP::GitHub Actions did not expose RUNNER_TEMP for this job."
+            exit 1
+          fi
+          HF_SOURCE_DIR="$RUNNER_TEMP/pr-size-labeler-huggingface-space"
           if [ -z "$HF_TOKEN" ]; then
             echo "::error title=Missing HF_TOKEN::Set the repository secret HF_TOKEN. Create it at https://huggingface.co/settings/tokens and give it write access to the target Hugging Face Space repository."
             exit 1
@@ -44,7 +47,9 @@ jobs:
           if [ -z "$HF_SPACE" ]; then
             HF_SPACE="kvokka/pr-size-labeler"
           fi
+          echo "HF_SOURCE_DIR=$HF_SOURCE_DIR" >> "$GITHUB_ENV"
           echo "HF_SPACE=$HF_SPACE" >> "$GITHUB_ENV"
+          echo "Using temp deploy directory: $HF_SOURCE_DIR"
           echo "Using Hugging Face Space: $HF_SPACE"
       - name: Build Linux binary for Hugging Face
         run: |
