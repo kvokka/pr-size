@@ -31,11 +31,10 @@ func LoadEnv() (Env, error) {
 		return Env{}, fmt.Errorf("parse APP_ID: %w", err)
 	}
 
-	privateKeyPEM := strings.TrimSpace(os.Getenv("PRIVATE_KEY"))
+	privateKeyPEM := normalizePrivateKeyPEM(os.Getenv("PRIVATE_KEY"))
 	if privateKeyPEM == "" {
 		return Env{}, errors.New("PRIVATE_KEY is required")
 	}
-	privateKeyPEM = strings.ReplaceAll(privateKeyPEM, `\n`, "\n")
 
 	webhookSecret := strings.TrimSpace(os.Getenv("WEBHOOK_SECRET"))
 	if webhookSecret == "" {
@@ -54,4 +53,24 @@ func LoadEnv() (Env, error) {
 		PrivateKeyPEM:    privateKeyPEM,
 		GitHubAPIBaseURL: apiBaseURL,
 	}, nil
+}
+
+func normalizePrivateKeyPEM(value string) string {
+	normalized := strings.TrimSpace(value)
+	if len(normalized) >= 2 {
+		if normalized[0] == '"' && normalized[len(normalized)-1] == '"' {
+			if unquoted, err := strconv.Unquote(normalized); err == nil {
+				normalized = unquoted
+			} else {
+				normalized = normalized[1 : len(normalized)-1]
+			}
+		} else if normalized[0] == '\'' && normalized[len(normalized)-1] == '\'' {
+			normalized = normalized[1 : len(normalized)-1]
+		}
+	}
+	replacer := strings.NewReplacer(`\r\n`, "\n", `\n`, "\n", `\r`, "\n")
+	normalized = replacer.Replace(normalized)
+	normalized = strings.ReplaceAll(normalized, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	return strings.TrimSpace(normalized)
 }
