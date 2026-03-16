@@ -11,6 +11,12 @@ This project is intentionally transparent:
 - no hidden hosted-app behavior
 - reproducible Go 1.26 binary builds attached to GitHub Releases
 
+## Example
+
+![screenshot](assets/labels.png)
+
+Live [repo](https://github.com/kvokka/pr-size-labler-test/pulls)
+
 ## What it does
 
 For each supported pull request event, `pr-size-labeler`:
@@ -119,8 +125,33 @@ Copy `.env.example` and set:
 - `WEBHOOK_SECRET`
 - optional `LISTEN_ADDR`
 - optional `GITHUB_API_BASE_URL`
+- optional `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED`
+- optional `STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK`
 
 See [`docs/github-app.md`](docs/github-app.md) for where each value comes from.
+
+### Startup recovery for missed failed deliveries
+
+If you deploy on Hugging Face Spaces, rebuilds and restarts can make the webhook endpoint temporarily unavailable. `pr-size-labeler` can optionally try to recover from that on process startup by listing recent **failed** GitHub App webhook deliveries and asking GitHub to redeliver them.
+
+Environment variables:
+
+- `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED` — set to `true` to enable startup recovery
+- `STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK` — Go duration string for how far back to inspect deliveries, default `2h`
+
+Example:
+
+```bash
+STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED=true
+STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK=2h
+```
+
+Behavior notes:
+
+- this runs **once on startup**, not on a schedule
+- it only looks at deliveries inside the configured lookback window
+- it only redelivers deliveries whose GitHub delivery `status` is not `OK`
+- GitHub only allows webhook redelivery for recent deliveries, so this is a best-effort recovery tool, not a durable queue
 
 ### 3. Run locally
 
