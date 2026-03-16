@@ -6,5 +6,5 @@ default_permissions:
   contents: read
   metadata: read
 
-name: pr-size
+name: pr-size-labeler
 description: OSS GitHub App that applies transparent pull request size labels.

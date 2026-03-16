@@ -31,8 +31,8 @@ jobs:
           mkdir -p dist
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          out="dist/pr-size-${GOOS}-${GOARCH}${ext}"
-          go build -o "$out" ./cmd/pr-size
+          out="dist/pr-size-labeler-${GOOS}-${GOARCH}${ext}"
+          go build -o "$out" ./cmd/pr-size-labeler
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,4 +41,4 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          gh release upload "${{ github.event.release.tag_name }}" "dist/pr-size-${GOOS}-${GOARCH}${ext}" --clobber
+          gh release upload "${{ github.event.release.tag_name }}" "dist/pr-size-labeler-${GOOS}-${GOARCH}${ext}" --clobber

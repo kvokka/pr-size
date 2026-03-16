@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"pr-size/internal/auth"
-	"pr-size/internal/githubapi"
+	"pr-size-labeler/internal/auth"
+	"pr-size-labeler/internal/githubapi"
 )
 
 type requestRecord struct {

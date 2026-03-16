@@ -5,7 +5,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"pr-size/internal/labels"
+	"pr-size-labeler/internal/labels"
 )
 
 type labelOverride struct {

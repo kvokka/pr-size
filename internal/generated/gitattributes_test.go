@@ -24,7 +24,7 @@ generated/*.go linguist-generated
 		{"vendor/github.com/pkg/errors/errors.go", true},
 		{"generated/client.go", true},
 		{"docs/readme.md", false},
-		{"cmd/pr-size/main.go", false},
+		{"cmd/pr-size-labeler/main.go", false},
 	}
 
 	for _, tt := range tests {

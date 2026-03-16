@@ -1,5 +1,5 @@
 ---
-title: pr-size
+title: pr-size-labeler
 emoji: 📏
 colorFrom: blue
 colorTo: green
@@ -7,11 +7,13 @@ sdk: docker
 pinned: false
 ---
 
-## pr-size
+## pr-size-labeler
 
-This Space runs the public deployment of `pr-size`.
+This Space runs the public deployment of `pr-size-labeler`.
 
 The application binary is built from the GitHub repository and synced here by GitHub Actions.
+
+The workflow also syncs the runtime settings from GitHub Actions into Hugging Face Space secrets and variables through the `kvokka/huggingface` action itself.
 
 Required Space secrets:
 
@@ -21,7 +23,7 @@ Required Space secrets:
 
 Optional Space variables:
 
-- `LISTEN_ADDR` (defaults to `:7860` in the container)
-- `GITHUB_API_BASE_URL` (only needed for GitHub Enterprise)
+- `LISTEN_ADDR` (set to `:7860` by the workflow)
+- `GITHUB_API_BASE_URL` (set by the workflow, defaults to GitHub.com)
 
 See the GitHub repository README and deployment docs for the full setup flow.

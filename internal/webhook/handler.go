@@ -13,11 +13,11 @@ import (
 	"net/netip"
 	"strings"
 
-	"pr-size/internal/auth"
-	"pr-size/internal/config"
-	"pr-size/internal/generated"
-	"pr-size/internal/githubapi"
-	"pr-size/internal/labels"
+	"pr-size-labeler/internal/auth"
+	"pr-size-labeler/internal/config"
+	"pr-size-labeler/internal/generated"
+	"pr-size-labeler/internal/githubapi"
+	"pr-size-labeler/internal/labels"
 )
 
 type Handler struct {

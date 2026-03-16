@@ -14,7 +14,7 @@ This repository is an OSS, self-hostable replacement for `pull-request-size`. Th
 
 ## Key paths
 
-- `cmd/pr-size/main.go` — process entrypoint
+- `cmd/pr-size-labeler/main.go` — process entrypoint
 - `internal/webhook/` — HTTP webhook handling
 - `internal/githubapi/` — GitHub REST calls
 - `internal/generated/` — `.gitattributes` parsing and matching
@@ -26,8 +26,8 @@ This repository is an OSS, self-hostable replacement for `pull-request-size`. Th
 
 ```bash
 go test ./...
-mkdir -p dist && go build -o dist/pr-size ./cmd/pr-size
-go run ./cmd/pr-size
+mkdir -p dist && go build -o dist/pr-size-labeler ./cmd/pr-size-labeler
+go run ./cmd/pr-size-labeler
 ```
 
 ## Development preference

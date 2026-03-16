@@ -1,6 +1,6 @@
-# pr-size
+# pr-size-labeler
 
-`pr-size` is a fully open-source GitHub App service that applies `size/*` labels to pull requests based on effective lines changed.
+`pr-size-labeler` is a fully open-source GitHub App service that applies `size/*` labels to pull requests based on effective lines changed.
 
 It is inspired by [`noqcks/pull-request-size`](https://github.com/noqcks/pull-request-size), but built around a transparent workflow, free use, and easy setup for both public repositories and private self-hosted setups.
 
@@ -13,7 +13,7 @@ This project is intentionally transparent:
 
 ## What it does
 
-For each supported pull request event, `pr-size`:
+For each supported pull request event, `pr-size-labeler`:
 
 1. reads the pull request additions and deletions
 2. subtracts files matched by `.gitattributes` entries marked `linguist-generated=true`
@@ -46,7 +46,7 @@ The thresholds intentionally follow the same sizing model as the original `pull-
 
 ### `.gitattributes`
 
-`pr-size` uses the same basic idea as the reference project: patterns marked `linguist-generated=true` are excluded from size totals.
+`pr-size-labeler` uses the same basic idea as the reference project: patterns marked `linguist-generated=true` are excluded from size totals.
 
 Example:
 
@@ -125,7 +125,7 @@ See [`docs/github-app.md`](docs/github-app.md) for where each value comes from.
 ### 3. Run locally
 
 ```bash
-go run ./cmd/pr-size
+go run ./cmd/pr-size-labeler
 ```
 
 ### 4. Test
@@ -137,7 +137,7 @@ go test ./...
 ### 5. Build a release binary locally
 
 ```bash
-mkdir -p dist && go build -o dist/pr-size ./cmd/pr-size
+mkdir -p dist && go build -o dist/pr-size-labeler ./cmd/pr-size-labeler
 ```
 
 ## Deployment

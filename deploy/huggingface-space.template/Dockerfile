@@ -3,10 +3,10 @@ FROM debian:bookworm-slim
 RUN useradd --create-home --shell /usr/sbin/nologin appuser
 
 WORKDIR /app
-COPY pr-size /app/pr-size
+COPY pr-size-labeler /app/pr-size-labeler
 
 ENV LISTEN_ADDR=:7860
 EXPOSE 7860
 
 USER appuser
-ENTRYPOINT ["/app/pr-size"]
+ENTRYPOINT ["/app/pr-size-labeler"]

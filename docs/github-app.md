@@ -8,10 +8,17 @@ The goal is to make the app-creation process explicit instead of assuming GitHub
 
 ## Before you start
 
-You need two things first:
+You need to decide two things first:
 
-1. a public HTTPS webhook URL for your `pr-size` deployment
+1. the final public deployment URL for `pr-size-labeler`
 2. a random secret you will use both in GitHub and in the app runtime as `WEBHOOK_SECRET`
+
+For the default Hugging Face flow, pick the Space name first. That Space name determines the public URL you put into the GitHub App webhook field.
+
+Example target:
+
+- Space repo: `kvokka/pr-size-labeler`
+- public URL: `https://kvokka-pr-size-labeler.hf.space/`
 
 For example:
 
@@ -23,11 +30,13 @@ For example:
 
 Open `https://github.com/settings/apps/new` and fill in the fields like this.
 
+Important: the checked-in `app.yml` file is only a reference for the required permissions and event names. GitHub does not automatically apply or sync that file when you use the manual App creation page.
+
 ### Basic identification
 
 #### GitHub App name
 
-Use any unique app name you want. A good default is `pr-size` or `your-org-pr-size`.
+Use any unique app name you want. A good default is `pr-size-labeler` or `your-org-pr-size-labeler`.
 
 #### Homepage URL
 
@@ -83,7 +92,7 @@ Enable webhooks.
 
 #### Webhook URL
 
-Set this to the public HTTPS URL where `pr-size` receives GitHub webhooks.
+Set this to the public HTTPS URL where `pr-size-labeler` receives GitHub webhooks.
 
 Examples:
 
@@ -100,7 +109,7 @@ You must reuse the exact same value as the runtime `WEBHOOK_SECRET`.
 
 ## Permissions
 
-Set only the permissions the current implementation needs.
+Set only the permissions the current implementation needs. These must be selected manually in the GitHub UI.
 
 ### Repository permissions
 
@@ -125,6 +134,8 @@ Subscribe to:
 - `Pull request`
 
 That covers the app logic for opened, reopened, synchronize, and edited pull request events.
+
+Do not subscribe to `meta`. This app does not use it.
 
 ## Installation scope
 
@@ -163,9 +174,24 @@ Install the GitHub App on the repositories where you want PR size labels to be m
 
 Make sure the target repositories are the ones receiving pull request events.
 
+## What you set now vs what you get later
+
+### You set during App creation
+
+- `Webhook URL`
+- `Webhook secret`
+- repository permissions
+- subscribed event `Pull request`
+
+### GitHub gives you after creation
+
+- `APP_ID`
+- `PRIVATE_KEY` after you generate and download it
+- the install flow for choosing repositories
+
 ## Required runtime values
 
-These are the values the `pr-size` app itself needs.
+These are the values the `pr-size-labeler` app itself needs.
 
 ### `APP_ID`
 
@@ -199,13 +225,13 @@ Change it only if you run against GitHub Enterprise Server.
 ## Where to set the runtime values
 
 - Local development: shell environment or your preferred `.env` loader
-- Hugging Face public Space: Space secrets for `APP_ID`, `PRIVATE_KEY`, `WEBHOOK_SECRET`
-- Hugging Face private Space: the same secrets, but on the private Space
+- Default Hugging Face deployment for this repo: GitHub repository secrets `APP_ID`, `PRIVATE_KEY`, `WEBHOOK_SECRET`, plus optional repository variables like `HUGGINGFACE_SPACE` and `GITHUB_API_BASE_URL`; the deploy workflow passes those through the updated `kvokka/huggingface` action into the target Hugging Face Space automatically
+- Manual Hugging Face deployment outside the default workflow: set the same values directly in the target Hugging Face Space secrets and variables
 - Self-hosted deployment: standard process manager, container secret store, or platform secret manager
 
 ## Optional manifest file
 
-This repo includes `app.yml` as a transparent reference for the required event and permission set, but GitHub App settings are not automatically synced from that file.
+This repo includes `app.yml` as a transparent reference for the required event and permission set, but GitHub App settings are not automatically synced from that file. If you change `app.yml`, your existing GitHub App will not update by itself.
 
 ## Notes
 

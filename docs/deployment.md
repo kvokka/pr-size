@@ -2,34 +2,117 @@
 
 The default deployment path for this repository is a public Hugging Face Space deployed by GitHub Actions.
 
+## Bootstrap order
+
+The first-time setup order matters.
+
+1. Choose the Hugging Face Space name you will deploy to.
+2. Use that Space name to determine the public webhook URL.
+3. Create the GitHub App with that webhook URL, the required permissions, and the `Pull request` subscribed event.
+4. After GitHub creates the App, collect `APP_ID` and `PRIVATE_KEY`, and keep the webhook secret you chose.
+5. Add the required GitHub Actions secrets and variables.
+6. Run the deploy workflow.
+7. Install the GitHub App on the repositories you want it to label.
+
+For the exact GitHub App form fields to fill in, see [`docs/github-app.md`](docs/github-app.md).
+
 ## Default: public Hugging Face Space
 
 This repo includes `.github/workflows/deploy-huggingface.yml`. On pushes to `main`, it:
 
-1. builds a Linux `pr-size` binary
-2. prepares a Docker-based Hugging Face Space bundle
-3. syncs that bundle to a public Hugging Face Space with `kvokka/huggingface`
+1. builds a Linux `pr-size-labeler` binary
+2. prepares a Docker-based Space bundle in the runner temp directory
+3. syncs the Space bundle and runtime secrets/variables to Hugging Face with `kvokka/huggingface`
 
 ### GitHub-side deployment settings
 
-Set these in the GitHub repository:
+Set these in the GitHub repository.
 
-- secret `HF_TOKEN`: a Hugging Face token with permission to update the target Space
-- variable `HUGGINGFACE_SPACE`: the target Space repo in `owner/space-name` form
+#### Required GitHub repository secrets
+
+- `HF_TOKEN`
+- `APP_ID`
+- `PRIVATE_KEY`
+- `WEBHOOK_SECRET`
+
+#### Optional GitHub repository variables
+
+- `HUGGINGFACE_SPACE`
+- `GITHUB_API_BASE_URL`
+
+#### `HUGGINGFACE_SPACE`
+
+Choose this first.
+
+- for this repository's default deployment target: `kvokka/pr-size-labeler`
+- for a fork: your own Space, for example `yourname/pr-size-labeler`
+
+The public webhook URL used during GitHub App creation comes from this choice. For a public Space, that will be the public Space URL for the chosen Space name.
+
+Example:
+
+`https://kvokka-pr-size-labeler.hf.space/`
+
+#### `HF_TOKEN`
+
+Create it here:
+
+`https://huggingface.co/settings/tokens`
+
+Use a token with write access to the target Space repository. If you use a fine-grained token, it needs write access to the Space repo you are deploying to.
+
+For this repository, the workflow default target is:
+
+`kvokka/pr-size-labeler`
+
+For a fork, set `HUGGINGFACE_SPACE` to your own `owner/space-name` value.
+
+#### `APP_ID`, `PRIVATE_KEY`, `WEBHOOK_SECRET`
+
+These are GitHub repository secrets because the workflow passes them directly to `kvokka/huggingface` via the action's built-in `space_secrets` support.
+
+Get them like this:
+
+1. Open `https://github.com/settings/apps/new` and create the GitHub App for this project.
+2. In the app form, enable webhooks and set a webhook secret. Save that exact value as the GitHub repository secret `WEBHOOK_SECRET`. You can use `openssl rand -hex 32` for quick secure secret generation.
+3. After the app is created, open its settings page and copy the numeric App ID. Save it as the GitHub repository secret `APP_ID`.
+4. On the same settings page, generate a private key and download the `.pem` file. Copy the full file contents into the GitHub repository secret `PRIVATE_KEY`.
+
+In short:
+
+- `APP_ID`: copied from the GitHub App settings page after creation
+- `PRIVATE_KEY`: full contents of the downloaded GitHub App private key `.pem`
+- `WEBHOOK_SECRET`: the secret string you entered in the GitHub App webhook configuration
+
+Add all three in GitHub at:
+
+`Settings -> Secrets and variables -> Actions`
+
+At GitHub App creation time, you must also set the App permissions and subscribed event manually in the GitHub UI. Those values are documented in [`docs/github-app.md`](docs/github-app.md).
+
+#### `GITHUB_API_BASE_URL`
+
+Optional repository variable. Leave it unset for GitHub.com and the workflow will default it to:
+
+`https://api.github.com/`
 
 ### Hugging Face-side runtime settings
 
-Set these in the target Hugging Face Space:
+The workflow configures these on the target Hugging Face Space automatically through the action itself:
 
 - Space secret `APP_ID`: from the GitHub App settings page
 - Space secret `PRIVATE_KEY`: full PEM contents downloaded from the GitHub App settings page
 - Space secret `WEBHOOK_SECRET`: the same secret configured in the GitHub App webhook settings
-- optional Space variable `LISTEN_ADDR`: `:7860` is correct for Hugging Face Spaces and is already the image default
-- optional Space variable `GITHUB_API_BASE_URL`: only needed for GitHub Enterprise Server
+- Space variable `LISTEN_ADDR`: forced to `:7860` for Hugging Face Spaces
+- Space variable `GITHUB_API_BASE_URL`: taken from the GitHub repo variable if set, otherwise defaults to `https://api.github.com/`
+
+That means this repo's default deployment does not require the separate custom Python setup that older versions needed, and it also does not require you to click into Hugging Face Space settings manually as long as the GitHub repository secrets and variables are configured correctly.
 
 ### How it is built
 
-The workflow builds `./cmd/pr-size` as a Linux binary, copies it into `deploy/huggingface-space`, adds the Docker Space files from `deploy/huggingface-space.template`, and syncs that folder to Hugging Face.
+The workflow builds `./cmd/pr-size-labeler` as a Linux binary, writes the deploy bundle into the GitHub runner temp directory, adds the Docker Space files from `deploy/huggingface-space.template`, and then lets `kvokka/huggingface` upload both the bundle and the configured `space_secrets` / `space_variables`.
+
+The temp-directory approach is important here because `kvokka/huggingface` performs its own checkout/clean step; generating the bundle inside the tracked repo path can be wiped before `source_dir` is uploaded.
 
 ## Private Hugging Face setup
 
@@ -41,10 +124,11 @@ If you want private execution logs instead of a public Space, keep the same buil
 - uses: kvokka/huggingface@v0
   with:
     hf_token: ${{ secrets.HF_TOKEN }}
-    huggingface_repo: ${{ vars.HUGGINGFACE_SPACE }}
+    huggingface_repo: ${{ vars.HUGGINGFACE_SPACE || 'kvokka/pr-size-labeler' }}
     repo_type: space
+    space_sdk: docker
     private: true
-    source_dir: deploy/huggingface-space
+    source_dir: ${{ env.HF_SOURCE_DIR }}
 ```
 
 That keeps the Space itself private, so Hugging Face execution logs stay visible only to the Space owner or members with access.
@@ -57,10 +141,11 @@ If you want private execution logs but still need a public endpoint, use the `kv
 - uses: kvokka/huggingface@v0
   with:
     hf_token: ${{ secrets.HF_TOKEN }}
-    huggingface_repo: ${{ vars.HUGGINGFACE_SPACE }}
+    huggingface_repo: ${{ vars.HUGGINGFACE_SPACE || 'kvokka/pr-size-labeler' }}
     repo_type: space
+    space_sdk: docker
     private: true
-    source_dir: deploy/huggingface-space
+    source_dir: ${{ env.HF_SOURCE_DIR }}
     create_proxy: true
     proxy_hf_token: ${{ secrets.PROXY_HF_TOKEN }}
     proxy_allow_origins: "https://your-domain.example"
@@ -71,19 +156,20 @@ Recommended private-mode rules:
 - use a dedicated `PROXY_HF_TOKEN` when proxying
 - keep `APP_ID`, `PRIVATE_KEY`, and `WEBHOOK_SECRET` in Space secrets, never public variables
 - restrict `proxy_allow_origins` if the endpoint is only meant for one site or service
+- if you use a fork, do not leave `HUGGINGFACE_SPACE` at the default `kvokka/pr-size-labeler`; point it to your own Space instead
 
 ## Reverse proxy
 
-If you run `pr-size` outside Hugging Face, putting it behind a reverse proxy is still the simplest production setup. The app logs source information from forwarded headers and remote address, which is useful when that proxy is public.
+If you run `pr-size-labeler` outside Hugging Face, putting it behind a reverse proxy is still the simplest production setup. The app logs source information from forwarded headers and remote address, which is useful when that proxy is public.
 
 ## Generic self-hosting
 
-`pr-size` is still a stateless Go HTTP service, so any platform that can run the binary and expose HTTPS can host it.
+`pr-size-labeler` is still a stateless Go HTTP service, so any platform that can run the binary and expose HTTPS can host it.
 
 Example build:
 
 ```bash
-mkdir -p dist && go build -o dist/pr-size ./cmd/pr-size
+mkdir -p dist && go build -o dist/pr-size-labeler ./cmd/pr-size-labeler
 ```
 
 For where to obtain the GitHub App values, see `docs/github-app.md`.

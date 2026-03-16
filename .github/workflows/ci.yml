@@ -17,4 +17,4 @@ jobs:
       - name: Run tests
         run: go test ./...
       - name: Build binary
-        run: mkdir -p dist && go build -o dist/pr-size ./cmd/pr-size
+        run: mkdir -p dist && go build -o dist/pr-size-labeler ./cmd/pr-size-labeler

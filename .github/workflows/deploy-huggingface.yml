@@ -9,24 +9,68 @@ on:
 jobs:
   deploy-public-space:
     runs-on: ubuntu-latest
+    env:
+      HF_SOURCE_DIR: ${{ runner.temp }}/pr-size-labeler-huggingface-space
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.0'
+      - name: Resolve deploy settings
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          APP_ID: ${{ secrets.APP_ID }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          HUGGINGFACE_SPACE_VAR: ${{ vars.HUGGINGFACE_SPACE }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error title=Missing HF_TOKEN::Set the repository secret HF_TOKEN. Create it at https://huggingface.co/settings/tokens and give it write access to the target Hugging Face Space repository."
+            exit 1
+          fi
+          if [ -z "$APP_ID" ]; then
+            echo "::error title=Missing APP_ID::Set the repository secret APP_ID to the numeric GitHub App ID."
+            exit 1
+          fi
+          if [ -z "$PRIVATE_KEY" ]; then
+            echo "::error title=Missing PRIVATE_KEY::Set the repository secret PRIVATE_KEY to the full GitHub App private key PEM contents."
+            exit 1
+          fi
+          if [ -z "$WEBHOOK_SECRET" ]; then
+            echo "::error title=Missing WEBHOOK_SECRET::Set the repository secret WEBHOOK_SECRET to the GitHub App webhook secret."
+            exit 1
+          fi
+          HF_SPACE="$HUGGINGFACE_SPACE_VAR"
+          if [ -z "$HF_SPACE" ]; then
+            HF_SPACE="kvokka/pr-size-labeler"
+          fi
+          echo "HF_SPACE=$HF_SPACE" >> "$GITHUB_ENV"
+          echo "Using Hugging Face Space: $HF_SPACE"
       - name: Build Linux binary for Hugging Face
         run: |
-          mkdir -p deploy/huggingface-space
-          GOOS=linux GOARCH=amd64 go build -o deploy/huggingface-space/pr-size ./cmd/pr-size
+          mkdir -p "$HF_SOURCE_DIR"
+          GOOS=linux GOARCH=amd64 go build -o "$HF_SOURCE_DIR/pr-size-labeler" ./cmd/pr-size-labeler
       - name: Prepare Hugging Face Space files
         run: |
-          cp deploy/huggingface-space.template/Dockerfile deploy/huggingface-space/Dockerfile
-          cp deploy/huggingface-space.template/README.md deploy/huggingface-space/README.md
+          if [ ! -d "$HF_SOURCE_DIR" ]; then
+            echo "::error title=Missing build bundle::Expected deployment bundle directory $HF_SOURCE_DIR to exist before invoking kvokka/huggingface."
+            exit 1
+          fi
+          cp deploy/huggingface-space.template/Dockerfile "$HF_SOURCE_DIR/Dockerfile"
+          cp deploy/huggingface-space.template/README.md "$HF_SOURCE_DIR/README.md"
       - name: Deploy public Space
         uses: kvokka/huggingface@v0
         with:
           hf_token: ${{ secrets.HF_TOKEN }}
-          huggingface_repo: ${{ vars.HUGGINGFACE_SPACE }}
+          huggingface_repo: ${{ env.HF_SPACE }}
           repo_type: space
+          space_sdk: docker
           private: false
-          source_dir: deploy/huggingface-space
+          source_dir: ${{ env.HF_SOURCE_DIR }}
+          space_secrets: |
+            APP_ID: "${{ secrets.APP_ID }}"
+            PRIVATE_KEY: "${{ secrets.PRIVATE_KEY }}"
+            WEBHOOK_SECRET: "${{ secrets.WEBHOOK_SECRET }}"
+          space_variables: |
+            LISTEN_ADDR: ":7860"
+            GITHUB_API_BASE_URL: "${{ vars.GITHUB_API_BASE_URL || 'https://api.github.com/' }}"

@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"os"
 
-	"pr-size/internal/auth"
-	"pr-size/internal/config"
-	"pr-size/internal/githubapi"
-	"pr-size/internal/webhook"
+	"pr-size-labeler/internal/auth"
+	"pr-size-labeler/internal/config"
+	"pr-size-labeler/internal/githubapi"
+	"pr-size-labeler/internal/webhook"
 )
 
 func main() {
@@ -35,7 +35,7 @@ func main() {
 		Handler: handler,
 	}
 
-	log.Printf("pr-size listening on %s", env.ListenAddr)
+	log.Printf("pr-size-labeler listening on %s", env.ListenAddr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
