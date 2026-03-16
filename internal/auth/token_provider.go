@@ -20,6 +20,10 @@ type TokenProvider interface {
 	Token(ctx context.Context, installationID int64) (string, error)
 }
 
+type AppTokenSource interface {
+	AppToken(ctx context.Context) (string, error)
+}
+
 type StaticTokenProvider string
 
 func (s StaticTokenProvider) Token(context.Context, int64) (string, error) {
@@ -64,7 +68,7 @@ func NewAppTokenProvider(appID int64, privateKeyPEM, baseURL string, client *htt
 }
 
 func (p *AppTokenProvider) Token(ctx context.Context, installationID int64) (string, error) {
-	token, err := p.appJWT()
+	token, err := p.AppToken(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -94,6 +98,10 @@ func (p *AppTokenProvider) Token(ctx context.Context, installationID int64) (str
 		return "", err
 	}
 	return payload.Token, nil
+}
+
+func (p *AppTokenProvider) AppToken(context.Context) (string, error) {
+	return p.appJWT()
 }
 
 func (p *AppTokenProvider) appJWT() (string, error) {

@@ -222,7 +222,11 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, dest any) error {
 var ErrNotFound = fmt.Errorf("not found")
 
 func (c *Client) do(ctx context.Context, method, endpoint string, body any) (*http.Response, error) {
-	resolved, err := url.Parse(strings.TrimRight(c.baseURL.String(), "/") + "/" + strings.TrimLeft(endpoint, "/"))
+	requestURL := endpoint
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		requestURL = strings.TrimRight(c.baseURL.String(), "/") + "/" + strings.TrimLeft(endpoint, "/")
+	}
+	resolved, err := url.Parse(requestURL)
 	if err != nil {
 		return nil, err
 	}
@@ -247,4 +251,22 @@ func (c *Client) do(ctx context.Context, method, endpoint string, body any) (*ht
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return c.httpClient.Do(req)
+}
+
+func nextPageURL(linkHeaders []string) string {
+	for _, header := range linkHeaders {
+		for _, part := range strings.Split(header, ",") {
+			part = strings.TrimSpace(part)
+			if !strings.Contains(part, `rel="next"`) {
+				continue
+			}
+			start := strings.Index(part, "<")
+			end := strings.Index(part, ">")
+			if start == -1 || end == -1 || end <= start+1 {
+				return ""
+			}
+			return part[start+1 : end]
+		}
+	}
+	return ""
 }

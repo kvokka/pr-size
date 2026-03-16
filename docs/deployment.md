@@ -40,6 +40,15 @@ Set these in the GitHub repository.
 - `HUGGINGFACE_SPACE`
 - `GITHUB_API_BASE_URL`
 
+#### Optional GitHub repository secrets for startup recovery behavior
+
+No extra credentials are required for startup recovery beyond the existing GitHub App secrets. If you enable startup failed-delivery recovery, configure it with these environment variables in the runtime:
+
+- `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED=true`
+- `STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK=2h`
+
+The app uses its existing GitHub App credentials to list recent GitHub App webhook deliveries on startup and redeliver only failed deliveries within the configured lookback period.
+
 #### `HUGGINGFACE_SPACE`
 
 Choose this first.
@@ -107,6 +116,7 @@ The workflow configures these on the target Hugging Face Space automatically thr
 - Space secret `WEBHOOK_SECRET`: the same secret configured in the GitHub App webhook settings
 - Space variable `LISTEN_ADDR`: forced to `:7860` for Hugging Face Spaces
 - Space variable `GITHUB_API_BASE_URL`: taken from the GitHub repo variable if set, otherwise defaults to `https://api.github.com/`
+- Space variable `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED`: forced to `true` in this repo's default deployment so startup recovery is active on Hugging Face without extra manual setup
 
 That means this repo's default deployment does not require the separate custom Python setup that older versions needed, and it also does not require you to click into Hugging Face Space settings manually as long as the GitHub repository secrets and variables are configured correctly.
 

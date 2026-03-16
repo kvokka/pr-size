@@ -6,15 +6,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
 type Env struct {
-	ListenAddr       string
-	WebhookSecret    string
-	AppID            int64
-	PrivateKeyPEM    string
-	GitHubAPIBaseURL string
+	ListenAddr                            string
+	WebhookSecret                         string
+	AppID                                 int64
+	PrivateKeyPEM                         string
+	GitHubAPIBaseURL                      string
+	StartupFailedDeliveryRecoveryEnabled  bool
+	StartupFailedDeliveryRecoveryLookback time.Duration
 }
 
 func LoadEnv() (Env, error) {
@@ -47,13 +50,51 @@ func LoadEnv() (Env, error) {
 		apiBaseURL = "https://api.github.com/"
 	}
 
+	recoveryEnabled, err := parseBoolEnv("STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED", false)
+	if err != nil {
+		return Env{}, err
+	}
+	recoveryLookback, err := parseDurationEnv("STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK", 2*time.Hour)
+	if err != nil {
+		return Env{}, err
+	}
+	if recoveryLookback <= 0 {
+		return Env{}, errors.New("STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK must be greater than 0")
+	}
+
 	return Env{
-		ListenAddr:       listenAddr,
-		WebhookSecret:    webhookSecret,
-		AppID:            appID,
-		PrivateKeyPEM:    privateKeyPEM,
-		GitHubAPIBaseURL: apiBaseURL,
+		ListenAddr:                            listenAddr,
+		WebhookSecret:                         webhookSecret,
+		AppID:                                 appID,
+		PrivateKeyPEM:                         privateKeyPEM,
+		GitHubAPIBaseURL:                      apiBaseURL,
+		StartupFailedDeliveryRecoveryEnabled:  recoveryEnabled,
+		StartupFailedDeliveryRecoveryLookback: recoveryLookback,
 	}, nil
+}
+
+func parseBoolEnv(name string, defaultValue bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return value, nil
+}
+
+func parseDurationEnv(name string, defaultValue time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return value, nil
 }
 
 func normalizePrivateKeyPEM(value string) string {

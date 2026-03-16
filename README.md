@@ -134,6 +134,8 @@ See [`docs/github-app.md`](docs/github-app.md) for where each value comes from.
 
 If you deploy on Hugging Face Spaces, rebuilds and restarts can make the webhook endpoint temporarily unavailable. `pr-size-labeler` can optionally try to recover from that on process startup by listing recent **failed** GitHub App webhook deliveries and asking GitHub to redeliver them.
 
+For this repository's default GitHub Actions → Hugging Face deployment, startup recovery is enabled automatically. The code-level default is still `false`, but the deploy workflow sets `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED=true` for the Space.
+
 Environment variables:
 
 - `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED` — set to `true` to enable startup recovery
@@ -149,8 +151,10 @@ STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK=2h
 Behavior notes:
 
 - this runs **once on startup**, not on a schedule
+- the HTTP server starts first, then recovery runs in the background so redeliveries can reach a live process
 - it only looks at deliveries inside the configured lookback window
 - it only redelivers deliveries whose GitHub delivery `status` is not `OK`
+- repeated restarts inside the same lookback window can cause the same failed original delivery to be redelivered again
 - GitHub only allows webhook redelivery for recent deliveries, so this is a best-effort recovery tool, not a durable queue
 
 ### 3. Run locally

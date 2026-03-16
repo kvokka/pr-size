@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"pr-size-labeler/internal/auth"
 )
@@ -43,6 +44,42 @@ func TestLoadEnvNormalizesPrivateKeyFormats(t *testing.T) {
 				t.Fatalf("NewAppTokenProvider returned error after normalization: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadEnvStartupRecoveryConfig(t *testing.T) {
+	t.Setenv("APP_ID", "123")
+	t.Setenv("WEBHOOK_SECRET", "secret")
+	t.Setenv("PRIVATE_KEY", testRSAPrivateKeyPEM(t))
+	t.Setenv("STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED", "true")
+	t.Setenv("STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK", "90m")
+
+	env, err := LoadEnv()
+	if err != nil {
+		t.Fatalf("LoadEnv returned error: %v", err)
+	}
+	if !env.StartupFailedDeliveryRecoveryEnabled {
+		t.Fatal("expected startup recovery to be enabled")
+	}
+	if env.StartupFailedDeliveryRecoveryLookback != 90*time.Minute {
+		t.Fatalf("lookback = %s, want %s", env.StartupFailedDeliveryRecoveryLookback, 90*time.Minute)
+	}
+}
+
+func TestLoadEnvStartupRecoveryDefaults(t *testing.T) {
+	t.Setenv("APP_ID", "123")
+	t.Setenv("WEBHOOK_SECRET", "secret")
+	t.Setenv("PRIVATE_KEY", testRSAPrivateKeyPEM(t))
+
+	env, err := LoadEnv()
+	if err != nil {
+		t.Fatalf("LoadEnv returned error: %v", err)
+	}
+	if env.StartupFailedDeliveryRecoveryEnabled {
+		t.Fatal("expected startup recovery to default to disabled")
+	}
+	if env.StartupFailedDeliveryRecoveryLookback != 2*time.Hour {
+		t.Fatalf("lookback = %s, want %s", env.StartupFailedDeliveryRecoveryLookback, 2*time.Hour)
 	}
 }
 

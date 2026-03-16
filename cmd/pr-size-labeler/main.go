@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"pr-size-labeler/internal/auth"
 	"pr-size-labeler/internal/config"
 	"pr-size-labeler/internal/githubapi"
+	"pr-size-labeler/internal/recovery"
 	"pr-size-labeler/internal/webhook"
 )
 
@@ -35,14 +38,34 @@ func main() {
 			return githubapi.NewClient(env.GitHubAPIBaseURL, token, outboundClient)
 		},
 	)
+	recoveryRunner := recovery.NewStartupRecovery(
+		log.Default(),
+		tokenProvider,
+		func(token string) recovery.DeliveryClient {
+			return githubapi.NewClient(env.GitHubAPIBaseURL, token, outboundClient)
+		},
+	)
 
 	server := &http.Server{
 		Addr:    env.ListenAddr,
 		Handler: handler,
 	}
+	listener, err := net.Listen("tcp", env.ListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+	go func() {
+		if err := recoveryRunner.Run(context.Background(), env); err != nil {
+			log.Printf("startup failed-delivery recovery skipped after error: %v", err)
+		}
+	}()
 
-	log.Printf("pr-size-labeler listening on %s", env.ListenAddr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	log.Printf("pr-size-labeler listening on %s", listener.Addr().String())
+	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 
