@@ -14,9 +14,9 @@ func TestListPullRequestFilesPaginates(t *testing.T) {
 		switch r.URL.RequestURI() {
 		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
 			w.Header().Add("Link", `<`+baseURL+`/repos/acme/widgets/pulls/7/files?per_page=100&page=2>; rel="next"`)
-			writeJSON(w, []PullRequestFile{{Filename: "page-one.go", Additions: 1, Deletions: 1}})
+			writeJSON(w, []PullRequestFile{{Filename: "page-one.go", Additions: 1, Deletions: 1, Patch: "@@ -1 +1 @@\n-old\n+new\n"}})
 		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=2":
-			writeJSON(w, []PullRequestFile{{Filename: "page-two.go", Additions: 2, Deletions: 2}})
+			writeJSON(w, []PullRequestFile{{Filename: "page-two.go", Additions: 2, Deletions: 2, Patch: "@@ -1 +1 @@\n-a\n+ab\n"}})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.RequestURI())
 		}
@@ -34,6 +34,9 @@ func TestListPullRequestFilesPaginates(t *testing.T) {
 	}
 	if files[1].Filename != "page-two.go" {
 		t.Fatalf("second filename = %q, want page-two.go", files[1].Filename)
+	}
+	if files[0].Patch == "" || files[1].Patch == "" {
+		t.Fatalf("expected patch text to be populated for all files")
 	}
 }
 

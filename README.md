@@ -1,6 +1,6 @@
 # pr-size-labeler
 
-`pr-size-labeler` is a fully open-source GitHub App service that applies `size/*` labels to pull requests based on effective lines changed.
+`pr-size-labeler` is a fully open-source GitHub App service that applies `size/*` labels to pull requests based on effective code change size.
 
 It is inspired by [`noqcks/pull-request-size`](https://github.com/noqcks/pull-request-size), but built around a transparent workflow, free use, and easy setup for both public repositories and private self-hosted setups.
 
@@ -21,12 +21,14 @@ Live [repo](https://github.com/kvokka/pr-size-labler-test/pulls)
 
 For each supported pull request event, `pr-size-labeler`:
 
-1. reads the pull request additions and deletions
-2. subtracts files matched by `.gitattributes` entries marked `linguist-generated=true`
-3. chooses one size label
-4. removes older configured size labels
-5. creates the chosen label if needed
-6. optionally adds one configured comment
+1. reads pull request file additions/deletions and patch hunks
+2. computes effective changed lines and effective changed symbols (added/deleted diff lines only; diff metadata/context ignored)
+3. subtracts files matched by `.gitattributes` entries marked `linguist-generated=true` from both totals
+4. loads per-label `lines` thresholds and optional per-label `symbols` thresholds from `.github/labels.yml`
+5. chooses the largest eligible size label when either that label's `lines` threshold or its `symbols` threshold is met
+6. removes older configured size labels
+7. creates the chosen label if needed
+8. optionally adds one configured comment
 
 Supported actions:
 
@@ -67,16 +69,25 @@ In this implementation, `.gitattributes` is read from the pull request base bran
 
 You can override label names, thresholds, colors, and optional comments.
 
+Each label supports:
+
+- `lines`: the changed-line threshold for that label
+- `symbols` (optional): the changed-symbol threshold for that label
+
+If `symbols` is omitted, it defaults to `lines * 100`. That keeps existing `lines`-only configs working unchanged while letting you tune symbol sensitivity per label.
+
 Example:
 
 ```yaml
 XS:
   name: size/XS
   lines: 0
+  symbols: 0
   color: 2FBF6B
 S:
   name: size/S
   lines: 10
+  symbols: 800
   color: 55A84B
   comment: |
     This PR is still in the small range.
@@ -87,6 +98,7 @@ M:
 L:
   name: size/L
   lines: 100
+  symbols: 10000
   color: 9F6A27
 XL:
   name: size/XL
@@ -101,6 +113,8 @@ XXL:
 ```
 
 Like `.gitattributes`, `labels.yml` is read from the pull request base branch.
+
+For selection, a label is eligible when either its `lines` threshold or its `symbols` threshold is met.
 
 ## Quick start
 

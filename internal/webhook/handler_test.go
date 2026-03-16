@@ -31,7 +31,10 @@ func TestPullRequestOpenedAppliesSingleSizeLabel(t *testing.T) {
 		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7/files":
-			writeJSON(w, []map[string]any{{"filename": "generated/bundle.js", "additions": 200, "deletions": 50}, {"filename": "internal/service.go", "additions": 20, "deletions": 4}})
+			writeJSON(w, []map[string]any{
+				{"filename": "generated/bundle.js", "additions": 200, "deletions": 50, "patch": "@@ -1 +1 @@\n-const old = 1;\n+const newer = 2;\n"},
+				{"filename": "internal/service.go", "additions": 20, "deletions": 4, "patch": "@@ -1,2 +1,2 @@\n-old\n+new\n-abc\n+xy\n context\n"},
+			})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.gitattributes":
 			writeJSON(w, map[string]any{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("generated/* linguist-generated=true\n"))})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.github/labels.yml":
@@ -98,7 +101,7 @@ func TestPullRequestOpenedAppliesSingleSizeLabel(t *testing.T) {
 		`pull_request stage=start action="opened" installation_id=42 repo=acme/widgets pr_number=7 accepted pull_request event`,
 		`pull_request stage=token action="opened" installation_id=42 repo=acme/widgets pr_number=7 requesting installation token`,
 		`pull_request stage=files action="opened" installation_id=42 repo=acme/widgets pr_number=7 fetched 2 pull request files`,
-		`pull_request stage=selection action="opened" installation_id=42 repo=acme/widgets pr_number=7 effective_total=24 selected_label=size/S`,
+		`pull_request stage=selection action="opened" installation_id=42 repo=acme/widgets pr_number=7 effective_lines=24 effective_symbols=11 selected_label=size/S`,
 		`pull_request stage=done action="opened" installation_id=42 repo=acme/widgets pr_number=7 completed pull request processing with label size/S`,
 	} {
 		assertLogContains(t, logs.String(), want)
@@ -143,6 +146,187 @@ func TestPullRequestLogsFailingStage(t *testing.T) {
 	}
 	assertLogContains(t, logs.String(), `pull_request stage=files action="opened" installation_id=42 repo=acme/widgets pr_number=7 fetching pull request files`)
 	assertLogContains(t, logs.String(), `pull_request stage=files action="opened" installation_id=42 repo=acme/widgets pr_number=7 error=`)
+}
+
+func TestPullRequestOpenedSelectsLargerLabelFromSymbols(t *testing.T) {
+	recorded := []requestRecord{}
+	largePatch := "@@ -1 +1 @@\n+" + strings.Repeat("x", 10000) + "\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7/files":
+			writeJSON(w, []map[string]any{{"filename": "internal/symbol_heavy.go", "additions": 1, "deletions": 0, "patch": largePatch}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.gitattributes":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.github/labels.yml":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.RequestURI() == "/repos/acme/widgets/labels/size%2FL":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/labels":
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := NewHandler(
+		"secret",
+		auth.StaticTokenProvider("test-token"),
+		func(token string) *githubapi.Client {
+			return githubapi.NewClient(server.URL+"/", token, server.Client())
+		},
+	)
+
+	payload := map[string]any{
+		"action":       "opened",
+		"installation": map[string]any{"id": 42},
+		"repository":   map[string]any{"name": "widgets", "owner": map[string]any{"login": "acme"}},
+		"pull_request": map[string]any{
+			"number":    7,
+			"additions": 1,
+			"deletions": 0,
+			"labels":    []map[string]any{},
+			"base":      map[string]any{"ref": "main"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signPayload("secret", body))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/L"]}`)
+}
+
+func TestPullRequestOpenedExcludesGeneratedFilesFromLineAndSymbolTotals(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7/files":
+			writeJSON(w, []map[string]any{
+				{"filename": "generated/huge.js", "additions": 1, "deletions": 0, "patch": "@@ -1 +1 @@\n+" + strings.Repeat("x", 10000) + "\n"},
+				{"filename": "internal/small.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+abcd\n"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.gitattributes":
+			writeJSON(w, map[string]any{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("generated/* linguist-generated=true\n"))})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.github/labels.yml":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.RequestURI() == "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/labels":
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := NewHandler(
+		"secret",
+		auth.StaticTokenProvider("test-token"),
+		func(token string) *githubapi.Client {
+			return githubapi.NewClient(server.URL+"/", token, server.Client())
+		},
+	)
+	var logs bytes.Buffer
+	handler.logger = log.New(&logs, "", 0)
+
+	payload := map[string]any{
+		"action":       "opened",
+		"installation": map[string]any{"id": 42},
+		"repository":   map[string]any{"name": "widgets", "owner": map[string]any{"login": "acme"}},
+		"pull_request": map[string]any{
+			"number":    7,
+			"additions": 2,
+			"deletions": 0,
+			"labels":    []map[string]any{},
+			"base":      map[string]any{"ref": "main"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signPayload("secret", body))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+	assertLogContains(t, logs.String(), `effective_lines=1 effective_symbols=4 selected_label=size/XS`)
+}
+
+func TestPullRequestOpenedUsesExplicitConfiguredSymbolThresholds(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7/files":
+			writeJSON(w, []map[string]any{{"filename": "internal/symbol_custom.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+" + strings.Repeat("x", 250) + "\n"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.gitattributes":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/contents/.github/labels.yml":
+			writeJSON(w, map[string]any{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("L:\n  symbols: 250\n"))})
+		case r.Method == http.MethodGet && r.URL.RequestURI() == "/repos/acme/widgets/labels/size%2FL":
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/labels":
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := NewHandler(
+		"secret",
+		auth.StaticTokenProvider("test-token"),
+		func(token string) *githubapi.Client {
+			return githubapi.NewClient(server.URL+"/", token, server.Client())
+		},
+	)
+
+	payload := map[string]any{
+		"action":       "opened",
+		"installation": map[string]any{"id": 42},
+		"repository":   map[string]any{"name": "widgets", "owner": map[string]any{"login": "acme"}},
+		"pull_request": map[string]any{
+			"number":    7,
+			"additions": 1,
+			"deletions": 0,
+			"labels":    []map[string]any{},
+			"base":      map[string]any{"ref": "main"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signPayload("secret", body))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/L"]}`)
 }
 
 func TestInvalidSignatureRejected(t *testing.T) {
@@ -236,6 +420,46 @@ func TestRequestSourceFallsBackToRemoteAddr(t *testing.T) {
 
 	if got := requestSource(req); got != "198.51.100.25" {
 		t.Fatalf("requestSource() = %q, want 198.51.100.25", got)
+	}
+}
+
+func TestChangedSymbolsFromPatchCountsOnlyAddedAndDeletedContent(t *testing.T) {
+	patch := strings.Join([]string{
+		"diff --git a/file.go b/file.go",
+		"index 123..456 100644",
+		"--- a/file.go",
+		"+++ b/file.go",
+		"@@ -1,3 +1,4 @@",
+		" context line",
+		"-old",
+		"+new",
+		"+",
+		"-xy",
+		"\\ No newline at end of file",
+	}, "\n")
+
+	if got := changedSymbolsFromPatch(patch); got != 8 {
+		t.Fatalf("changedSymbolsFromPatch() = %d, want 8", got)
+	}
+}
+
+func TestChangedSymbolsFromPatchCountsContentStartingWithTripleMarkers(t *testing.T) {
+	patch := strings.Join([]string{
+		"--- a/file.go",
+		"+++ b/file.go",
+		"@@ -1,2 +1,2 @@",
+		"---bar",
+		"+++foo",
+	}, "\n")
+
+	if got := changedSymbolsFromPatch(patch); got != 10 {
+		t.Fatalf("changedSymbolsFromPatch() = %d, want 10", got)
+	}
+}
+
+func TestChangedSymbolsFromPatchEmptyPatchCountsZero(t *testing.T) {
+	if got := changedSymbolsFromPatch(""); got != 0 {
+		t.Fatalf("changedSymbolsFromPatch(empty) = %d, want 0", got)
 	}
 }
 

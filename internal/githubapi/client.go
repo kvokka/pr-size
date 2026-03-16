@@ -23,6 +23,7 @@ type PullRequestFile struct {
 	Filename  string `json:"filename"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
+	Patch     string `json:"patch"`
 }
 
 type IssueComment struct {

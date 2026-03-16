@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"unicode/utf8"
 
 	"pr-size-labeler/internal/auth"
 	"pr-size-labeler/internal/config"
@@ -151,18 +152,9 @@ func (h *Handler) handlePullRequest(ctx context.Context, event pullRequestEvent)
 	}
 	h.logPullRequestStage(event, "labels_config", fmt.Sprintf("loaded %d label definition(s)", len(labelSet)))
 
-	effectiveTotal := event.PullRequest.Additions + event.PullRequest.Deletions
-	for _, file := range files {
-		if generated.Match(file.Filename, patterns) {
-			effectiveTotal -= file.Additions + file.Deletions
-		}
-	}
-	if effectiveTotal < 0 {
-		effectiveTotal = 0
-	}
-
-	selected := labelSet.Select(effectiveTotal)
-	h.logPullRequestStage(event, "selection", fmt.Sprintf("effective_total=%d selected_label=%s", effectiveTotal, selected.Name))
+	effectiveLines, effectiveSymbols := effectiveTotals(files, patterns)
+	selected := labelSet.Select(effectiveLines, effectiveSymbols)
+	h.logPullRequestStage(event, "selection", fmt.Sprintf("effective_lines=%d effective_symbols=%d selected_label=%s", effectiveLines, effectiveSymbols, selected.Name))
 	h.logPullRequestStage(event, "labels_cleanup", "removing previously configured size labels")
 	if err := h.removeExistingLabels(ctx, client, owner, repo, event, labelSet, selected.Name); err != nil {
 		h.logPullRequestFailure(event, "labels_cleanup", err)
@@ -187,6 +179,41 @@ func (h *Handler) handlePullRequest(ctx context.Context, event pullRequestEvent)
 	}
 	h.logPullRequestStage(event, "done", fmt.Sprintf("completed pull request processing with label %s", selected.Name))
 	return nil
+}
+
+func effectiveTotals(files []githubapi.PullRequestFile, patterns []string) (int, int) {
+	effectiveLines := 0
+	effectiveSymbols := 0
+	for _, file := range files {
+		if generated.Match(file.Filename, patterns) {
+			continue
+		}
+		effectiveLines += file.Additions + file.Deletions
+		effectiveSymbols += changedSymbolsFromPatch(file.Patch)
+	}
+	if effectiveLines < 0 {
+		effectiveLines = 0
+	}
+	if effectiveSymbols < 0 {
+		effectiveSymbols = 0
+	}
+	return effectiveLines, effectiveSymbols
+}
+
+func changedSymbolsFromPatch(patch string) int {
+	total := 0
+	for _, line := range strings.Split(patch, "\n") {
+		if line == "" {
+			continue
+		}
+		if line == "+++" || line == "---" || strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- ") {
+			continue
+		}
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			total += utf8.RuneCountInString(line[1:])
+		}
+	}
+	return total
 }
 
 func (h *Handler) removeExistingLabels(ctx context.Context, client *githubapi.Client, owner, repo string, event pullRequestEvent, labelSet labels.Set, keep string) error {

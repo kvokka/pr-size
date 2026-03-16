@@ -11,6 +11,7 @@ import (
 type labelOverride struct {
 	Name    *string `yaml:"name"`
 	Lines   *int    `yaml:"lines"`
+	Symbols *int    `yaml:"symbols"`
 	Color   *string `yaml:"color"`
 	Comment *string `yaml:"comment"`
 }
@@ -37,6 +38,10 @@ func LoadLabelSet(content string) (labels.Set, error) {
 		}
 		if override.Lines != nil {
 			merged.Lines = *override.Lines
+		}
+		if override.Symbols != nil {
+			symbols := *override.Symbols
+			merged.Symbols = &symbols
 		}
 		if override.Color != nil {
 			merged.Color = *override.Color
