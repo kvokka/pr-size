@@ -1,5 +1,12 @@
 # pr-size-labeler
 
+[![Build Status](https://img.shields.io/github/actions/workflow/status/kvokka/pr-size-labler/ci.yml)](https://github.com/kvokka/pr-size-labler/actions)
+[![Open in HuggingFace](https://img.shields.io/badge/Open%20in-HuggingFace-9595ff?logo=huggingface&logoColor=white)](https://huggingface.co/spaces/kvokka/pr-size-labeler/tree/main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/kvokka/pr-size-labler)](https://github.com/kvokka/pr-size-labler/releases/latest)
+[![GitHub stars](https://img.shields.io/github/stars/kvokka/pr-size-labler)](https://github.com/kvokka/pr-size-labler/stargazers)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github-sponsors)](https://github.com/sponsors/kvokka)
+
 `pr-size-labeler` is a fully open-source GitHub App service that applies `size/*` labels to pull requests based on effective code change size.
 
 It is inspired by [`noqcks/pull-request-size`](https://github.com/noqcks/pull-request-size), but built around a transparent workflow, free use, and easy setup for both public repositories and private self-hosted setups.
