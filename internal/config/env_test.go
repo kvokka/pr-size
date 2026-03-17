@@ -47,6 +47,35 @@ func TestLoadEnvNormalizesPrivateKeyFormats(t *testing.T) {
 	}
 }
 
+func TestLoadEnvNormalizesWebhookSecretFormats(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "raw", raw: "secret", want: "secret"},
+		{name: "double quoted", raw: `"secret"`, want: "secret"},
+		{name: "single quoted", raw: `'secret'`, want: "secret"},
+		{name: "surrounding whitespace", raw: "  secret  ", want: "secret"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APP_ID", "123")
+			t.Setenv("WEBHOOK_SECRET", tt.raw)
+			t.Setenv("PRIVATE_KEY", testRSAPrivateKeyPEM(t))
+
+			env, err := LoadEnv()
+			if err != nil {
+				t.Fatalf("LoadEnv returned error: %v", err)
+			}
+			if env.WebhookSecret != tt.want {
+				t.Fatalf("webhook secret = %q, want %q", env.WebhookSecret, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadEnvStartupRecoveryConfig(t *testing.T) {
 	t.Setenv("APP_ID", "123")
 	t.Setenv("WEBHOOK_SECRET", "secret")

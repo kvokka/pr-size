@@ -41,7 +41,7 @@ func LoadEnv() (Env, error) {
 		return Env{}, errors.New("PRIVATE_KEY is required")
 	}
 
-	webhookSecret := strings.TrimSpace(os.Getenv("WEBHOOK_SECRET"))
+	webhookSecret := normalizeSecret(os.Getenv("WEBHOOK_SECRET"))
 	if webhookSecret == "" {
 		return Env{}, errors.New("WEBHOOK_SECRET is required")
 	}
@@ -102,6 +102,22 @@ func parseDurationEnv(name string, defaultValue time.Duration) (time.Duration, e
 		return 0, fmt.Errorf("parse %s: %w", name, err)
 	}
 	return value, nil
+}
+
+func normalizeSecret(value string) string {
+	normalized := strings.TrimSpace(value)
+	if len(normalized) >= 2 {
+		if normalized[0] == '"' && normalized[len(normalized)-1] == '"' {
+			if unquoted, err := strconv.Unquote(normalized); err == nil {
+				normalized = unquoted
+			} else {
+				normalized = normalized[1 : len(normalized)-1]
+			}
+		} else if normalized[0] == '\'' && normalized[len(normalized)-1] == '\'' {
+			normalized = normalized[1 : len(normalized)-1]
+		}
+	}
+	return strings.TrimSpace(normalized)
 }
 
 func normalizePrivateKeyPEM(value string) string {

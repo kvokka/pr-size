@@ -111,10 +111,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		h.logWebhookReject("read_body", r.Header.Get("X-GitHub-Event"), "read request body failed")
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
 	if !h.validSignature(body, r.Header.Get("X-Hub-Signature-256")) {
+		h.logWebhookReject("invalid_signature", r.Header.Get("X-GitHub-Event"), "signature verification failed")
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -130,10 +132,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "pull_request":
 		var event pullRequestEvent
 		if err := json.Unmarshal(body, &event); err != nil {
+			h.logWebhookReject("invalid_payload", eventName, "pull_request payload JSON decode failed")
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
 		if !allowedPullRequestAction(event.Action) {
+			h.logWebhookReject("ignored_action", eventName, fmt.Sprintf("ignored pull_request action=%q", event.Action))
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
@@ -146,10 +150,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "installation", "installation_repositories":
 		var event installationEvent
 		if err := json.Unmarshal(body, &event); err != nil {
+			h.logWebhookReject("invalid_payload", eventName, fmt.Sprintf("%s payload JSON decode failed", eventName))
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
 		if !allowedInstallationAction(eventName, event.Action) {
+			h.logWebhookReject("ignored_action", eventName, fmt.Sprintf("ignored %s action=%q", eventName, event.Action))
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
@@ -160,6 +166,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	default:
+		h.logWebhookReject("ignored_event", eventName, "event is not handled")
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -623,6 +630,13 @@ func (h *Handler) validSignature(body []byte, signature string) bool {
 	mac.Write(body)
 	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(signature))
+}
+
+func (h *Handler) logWebhookReject(reason, eventName, message string) {
+	if h.logger == nil {
+		return
+	}
+	h.logger.Printf("webhook_reject reason=%s event=%q %s", reason, eventName, message)
 }
 
 func (h *Handler) logRequest(r *http.Request) {

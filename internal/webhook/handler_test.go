@@ -714,6 +714,7 @@ func TestInvalidSignatureRejected(t *testing.T) {
 		t.Fatal("unexpected outbound GitHub call for invalid signature")
 	}
 	assertLogContains(t, logs.String(), `incoming request method=POST path=/ event="pull_request"`)
+	assertLogContains(t, logs.String(), `webhook_reject reason=invalid_signature event="pull_request" signature verification failed`)
 	assertLogNotContains(t, logs.String(), `source="198.51.100.25"`)
 }
 
