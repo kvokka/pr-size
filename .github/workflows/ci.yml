@@ -2,19 +2,13 @@ name: CI
 
 on:
   push:
-    branches:
+    branches-ignore:
       - main
   pull_request:
 
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.0'
-      - name: Run tests
-        run: go test ./...
-      - name: Build binary
-        run: mkdir -p dist && go build -o dist/pr-size-labeler ./cmd/pr-size-labeler
+      - uses: ./.github/actions/ci

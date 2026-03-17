@@ -12,14 +12,14 @@ The first-time setup order matters.
 4. Subscribe to the required `Pull request` event.
 5. After GitHub creates the App, collect `APP_ID` and `PRIVATE_KEY`, and keep the webhook secret you chose.
 6. Add the required GitHub Actions secrets and variables.
-7. Run the deploy workflow.
+7. Push your deployment change to `main`; the deploy workflow runs the shared CI action first and deploys only if that passes.
 8. Install the GitHub App on the repositories you want it to label.
 
 For the exact GitHub App form fields to fill in, see [`docs/github-app.md`](docs/github-app.md).
 
 ## Default: public Hugging Face Space
 
-This repo includes `.github/workflows/deploy-huggingface.yml`. On pushes to `main`, it:
+This repo includes `.github/workflows/deploy-huggingface.yml`. On pushes to `main`, it first runs the shared CI action and then:
 
 1. builds a Linux `pr-size-labeler` binary
 2. prepares a Docker-based Space bundle in the runner temp directory
