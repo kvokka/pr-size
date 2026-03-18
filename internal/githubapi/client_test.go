@@ -88,6 +88,39 @@ func TestGetRepositoryReturnsDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestListInstallationRepositoriesPaginates(t *testing.T) {
+	var baseURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.RequestURI() {
+		case "/installation/repositories?per_page=100&page=1":
+			w.Header().Add("Link", `<`+baseURL+`/installation/repositories?per_page=100&page=2>; rel="next"`)
+			writeJSON(w, map[string]any{
+				"repositories": []map[string]any{{"full_name": "acme/widgets", "name": "widgets", "owner": map[string]any{"login": "acme"}}},
+			})
+		case "/installation/repositories?per_page=100&page=2":
+			writeJSON(w, map[string]any{
+				"repositories": []map[string]any{{"full_name": "acme/api", "name": "api", "owner": map[string]any{"login": "acme"}}},
+			})
+		default:
+			t.Fatalf("unexpected request %s", r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	client := NewClient(server.URL+"/", "test-token", server.Client())
+	repositories, err := client.ListInstallationRepositories(context.Background())
+	if err != nil {
+		t.Fatalf("ListInstallationRepositories returned error: %v", err)
+	}
+	if len(repositories) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(repositories))
+	}
+	if repositories[0].FullName != "acme/widgets" || repositories[1].FullName != "acme/api" {
+		t.Fatalf("unexpected repositories: %+v", repositories)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {

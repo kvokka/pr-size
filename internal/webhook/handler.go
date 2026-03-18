@@ -27,6 +27,22 @@ var (
 	errLabelsConfigInvalid = errors.New("labels config invalid")
 )
 
+type labelsConfigInvalidError struct {
+	cause error
+}
+
+func (e labelsConfigInvalidError) Error() string {
+	return e.cause.Error()
+}
+
+func (e labelsConfigInvalidError) Unwrap() error {
+	return e.cause
+}
+
+func (e labelsConfigInvalidError) Is(target error) bool {
+	return target == errLabelsConfigInvalid
+}
+
 type Handler struct {
 	webhookSecret string
 	tokenProvider auth.TokenProvider
@@ -208,11 +224,12 @@ func (h *Handler) handlePullRequest(ctx context.Context, event pullRequestEvent)
 	}
 
 	target := event.target()
-	labelsConfig, configRef, usedDefaults, err := h.loadRepositoryLabelsConfig(ctx, client, target.Owner, target.Repo, event.defaultBranch())
+	labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, target.Owner, target.Repo, event.defaultBranch())
 	if err != nil {
-		return h.handlePullRequestLabelsConfigError(target, configRef, err)
+		return h.handlePullRequestLabelsConfigError(ctx, client, target, configRef, err)
 	}
 	h.logLabelsConfigLoaded(target, configRef, len(labelsConfig.Labels), usedDefaults)
+	h.ensureLabelsConfigWarningsComment(ctx, client, target, configRef, warnings)
 	return h.processPullRequest(ctx, client, target, labelsConfig.Labels)
 }
 
@@ -244,13 +261,14 @@ func (h *Handler) handleMergedLabelsConfigChange(ctx context.Context, client *gi
 		return nil
 	}
 
-	labelsConfig, configRef, usedDefaults, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, defaultBranch)
+	labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, defaultBranch)
 	if err != nil {
-		return h.handlePullRequestConfigChangeLabelsError(event, configRef, err)
+		return h.handlePullRequestConfigChangeLabelsError(ctx, client, event, configRef, err)
 	}
 	if usedDefaults {
 		h.logPullRequestStage(event, "labels_config", fmt.Sprintf("using built-in defaults because .github/labels.yml is missing from default branch %s", safeBranch(configRef)))
 	}
+	h.ensureLabelsConfigWarningsComment(ctx, client, event.target(), configRef, warnings)
 	if !labelsConfig.Backfill.Enabled {
 		h.logPullRequestStage(event, "config_change", "backfill disabled in .github/labels.yml; skipping open pull request relabel")
 		return nil
@@ -267,19 +285,29 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 	}
 	client := h.newClient(token)
 
-	repositories := event.repositoriesForAction()
-	h.logger.Printf("connect_relabel event=%q action=%q repositories=%d", eventName, event.Action, len(repositories))
+	repositories, usedFallback, err := h.resolveConnectRepositories(ctx, client, event)
+	if err != nil {
+		return err
+	}
+	source := "webhook_payload"
+	if usedFallback {
+		source = "installation_api"
+	}
+	h.logger.Printf("connect_relabel event=%q action=%q repositories=%d source=%s", eventName, event.Action, len(repositories), source)
 	for _, repository := range repositories {
 		owner, repo, err := repository.ownerAndRepo()
 		if err != nil {
 			return err
 		}
-		labelsConfig, configRef, usedDefaults, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, "")
+		labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, "")
 		if err != nil {
 			if h.logConnectLabelsConfigSkip(owner, repo, configRef, err) {
 				continue
 			}
 			return err
+		}
+		if len(warnings) > 0 {
+			h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s ignored_labels_config_warnings=%q", owner, repo, safeBranch(configRef), strings.Join(warnings, "; "))
 		}
 		if !labelsConfig.Backfill.Enabled {
 			if usedDefaults {
@@ -495,29 +523,50 @@ func (h *Handler) resolveDefaultBranch(ctx context.Context, client *githubapi.Cl
 	return branch, nil
 }
 
-func (h *Handler) loadRepositoryLabelsConfig(ctx context.Context, client *githubapi.Client, owner, repo, knownDefaultBranch string) (config.LabelsConfig, string, bool, error) {
+func (h *Handler) resolveConnectRepositories(ctx context.Context, client *githubapi.Client, event installationEvent) ([]installationRepository, bool, error) {
+	repositories := event.repositoriesForAction()
+	if len(repositories) > 0 {
+		return repositories, false, nil
+	}
+
+	accessibleRepositories, err := client.ListInstallationRepositories(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("list installation repositories: %w", err)
+	}
+	repositories = make([]installationRepository, 0, len(accessibleRepositories))
+	for _, repository := range accessibleRepositories {
+		var converted installationRepository
+		converted.FullName = repository.FullName
+		converted.Name = repository.Name
+		converted.Owner.Login = repository.Owner.Login
+		repositories = append(repositories, converted)
+	}
+	return repositories, true, nil
+}
+
+func (h *Handler) loadRepositoryLabelsConfig(ctx context.Context, client *githubapi.Client, owner, repo, knownDefaultBranch string) (config.LabelsConfig, string, bool, []string, error) {
 	defaultBranch, err := h.resolveDefaultBranch(ctx, client, owner, repo, knownDefaultBranch)
 	if err != nil {
-		return config.LabelsConfig{}, defaultBranch, false, err
+		return config.LabelsConfig{}, defaultBranch, false, nil, err
 	}
 
 	labelsContent, err := client.GetRepositoryContent(ctx, owner, repo, ".github/labels.yml", defaultBranch)
 	if err != nil {
 		if err == githubapi.ErrNotFound {
-			labelsConfig, loadErr := config.LoadLabelsConfig("")
+			labelsConfig, warnings, loadErr := config.LoadLabelsConfigDetailed("")
 			if loadErr != nil {
-				return config.LabelsConfig{}, defaultBranch, true, loadErr
+				return config.LabelsConfig{}, defaultBranch, true, warnings, loadErr
 			}
-			return labelsConfig, defaultBranch, true, nil
+			return labelsConfig, defaultBranch, true, warnings, nil
 		}
-		return config.LabelsConfig{}, defaultBranch, false, err
+		return config.LabelsConfig{}, defaultBranch, false, nil, err
 	}
 
-	labelsConfig, err := config.LoadLabelsConfig(labelsContent)
+	labelsConfig, warnings, err := config.LoadLabelsConfigDetailed(labelsContent)
 	if err != nil {
-		return config.LabelsConfig{}, defaultBranch, false, fmt.Errorf("%w: %v", errLabelsConfigInvalid, err)
+		return config.LabelsConfig{}, defaultBranch, false, warnings, labelsConfigInvalidError{cause: err}
 	}
-	return labelsConfig, defaultBranch, false, nil
+	return labelsConfig, defaultBranch, false, warnings, nil
 }
 
 func pullRequestTouchesLabelsConfig(files []githubapi.PullRequestFile) bool {
@@ -529,17 +578,19 @@ func pullRequestTouchesLabelsConfig(files []githubapi.PullRequestFile) bool {
 	return false
 }
 
-func (h *Handler) handlePullRequestLabelsConfigError(target pullRequestTarget, defaultBranch string, err error) error {
+func (h *Handler) handlePullRequestLabelsConfigError(ctx context.Context, client *githubapi.Client, target pullRequestTarget, defaultBranch string, err error) error {
 	if h.logPullRequestLabelsConfigSkip(target, defaultBranch, err) {
+		h.ensureLabelsConfigErrorComment(ctx, client, target, defaultBranch, err)
 		return nil
 	}
 	h.logPullRequestTargetFailure(target, "labels_config", err)
 	return err
 }
 
-func (h *Handler) handlePullRequestConfigChangeLabelsError(event pullRequestEvent, defaultBranch string, err error) error {
+func (h *Handler) handlePullRequestConfigChangeLabelsError(ctx context.Context, client *githubapi.Client, event pullRequestEvent, defaultBranch string, err error) error {
 	if errors.Is(err, errLabelsConfigInvalid) {
 		h.logPullRequestStage(event, "labels_config", fmt.Sprintf("skipping: invalid .github/labels.yml on default branch %s (%v)", safeBranch(defaultBranch), err))
+		h.ensureLabelsConfigErrorComment(ctx, client, event.target(), defaultBranch, err)
 		return nil
 	}
 	h.logPullRequestFailure(event, "labels_config", err)
@@ -568,6 +619,44 @@ func (h *Handler) logLabelsConfigLoaded(target pullRequestTarget, defaultBranch 
 		return
 	}
 	h.logPullRequestTargetStage(target, "labels_config", fmt.Sprintf("loaded %d label definition(s) from default branch %s", labelCount, defaultBranch))
+}
+
+func (h *Handler) ensureLabelsConfigWarningsComment(ctx context.Context, client *githubapi.Client, target pullRequestTarget, defaultBranch string, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	h.logPullRequestTargetStage(target, "labels_config", fmt.Sprintf("ignored %d unsupported .github/labels.yml key(s) on default branch %s", len(warnings), safeBranch(defaultBranch)))
+	if err := h.ensureComment(ctx, client, target.Owner, target.Repo, target.Number, buildLabelsConfigWarningsComment(defaultBranch, warnings)); err != nil {
+		h.logPullRequestTargetFailure(target, "labels_config", fmt.Errorf("create labels config warning comment: %w", err))
+	}
+}
+
+func (h *Handler) ensureLabelsConfigErrorComment(ctx context.Context, client *githubapi.Client, target pullRequestTarget, defaultBranch string, err error) {
+	if !errors.Is(err, errLabelsConfigInvalid) {
+		return
+	}
+	if commentErr := h.ensureComment(ctx, client, target.Owner, target.Repo, target.Number, buildLabelsConfigErrorComment(defaultBranch, err)); commentErr != nil {
+		h.logPullRequestTargetFailure(target, "labels_config", fmt.Errorf("create labels config error comment: %w", commentErr))
+	}
+}
+
+func buildLabelsConfigWarningsComment(defaultBranch string, warnings []string) string {
+	var builder strings.Builder
+	builder.WriteString("<!-- pr-size-labeler:labels-config-warning -->\n")
+	fmt.Fprintf(&builder, "`pr-size-labeler` ignored unsupported `.github/labels.yml` entries from default branch `%s`:\n\n", safeBranch(defaultBranch))
+	for _, warning := range warnings {
+		fmt.Fprintf(&builder, "- %s\n", warning)
+	}
+	builder.WriteString("\nKnown settings were still applied.\n")
+	return builder.String()
+}
+
+func buildLabelsConfigErrorComment(defaultBranch string, err error) string {
+	return fmt.Sprintf(
+		"<!-- pr-size-labeler:labels-config-error -->\n`pr-size-labeler` could not load `.github/labels.yml` from default branch `%s`:\n\n- %s\n\nThis run skipped label changes.\n",
+		safeBranch(defaultBranch),
+		err,
+	)
 }
 
 func safeBranch(branch string) string {

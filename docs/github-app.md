@@ -113,6 +113,12 @@ Generate a strong random string yourself and save it. GitHub does not generate t
 
 You must reuse the exact same value as the runtime `WEBHOOK_SECRET`.
 
+For the default deployment flow in this repo, that means the same secret is stored in:
+
+- the GitHub App settings page webhook configuration
+- the GitHub repository Actions secret `WEBHOOK_SECRET`
+- the deployed runtime secret such as the Hugging Face Space secret `WEBHOOK_SECRET`
+
 ## Permissions
 
 Set only the permissions the current implementation needs. These must be selected manually in the GitHub UI.
@@ -198,6 +204,8 @@ Each target repository also needs:
 - an optional `.github/labels.yml` on its default branch if you want overrides or proactive backfill
 
 If `.github/labels.yml` is absent, normal pull request labeling still works with the built-in defaults.
+
+If `.github/labels.yml` already exists on the default branch before installation and `backfill.enabled: true`, the installation event uses that existing file immediately for connect-time backfill.
 
 ## What you set now vs what you get later
 

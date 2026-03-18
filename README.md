@@ -63,7 +63,8 @@ Proactive relabeling runs only when `.github/labels.yml` explicitly enables it:
 Config behavior:
 
 - if `.github/labels.yml` is missing, normal PR labeling uses built-in defaults and backfill stays disabled
-- if `.github/labels.yml` is invalid, the app makes no label changes
+- if `.github/labels.yml` contains unknown keys, they are ignored and the triggering PR gets a warning comment
+- if `.github/labels.yml` has invalid values, the triggering PR gets a warning comment and that run skips label changes
 - if the selected repository label does not exist yet, the app creates it
 
 ## Default labels
@@ -117,6 +118,8 @@ If `symbols` is omitted, it defaults to `lines * 100`.
 
 You only need to include the sections and keys you want to override.
 
+Unknown keys are ignored. On `pull_request`-driven runs, the app leaves a warning comment on the triggering PR so the config problem is visible without checking server logs.
+
 Example:
 
 ```yaml
@@ -157,6 +160,8 @@ labels:
 That is different from `.gitattributes`, which is still read from the pull request base branch.
 
 For selection, a label is eligible when either its `lines` threshold or its `symbols` threshold is met.
+
+Effective changed lines are counted as `additions + deletions`, matching GitHub diff totals. That means one removed line counts as one changed line, and one modified line counts as two changed lines.
 
 If you enable backfill, `lookback` is a pull request age window. The app relabels only open pull requests whose `created_at` is inside that window.
 
@@ -246,6 +251,7 @@ Behavior notes:
 - only pull requests created inside `backfill.lookback` are relabeled
 - direct pushes do not trigger relabeling
 - merged PR relabeling runs only when the merged PR touched exact path `.github/labels.yml`
+- if `.github/labels.yml` already exists on the default branch before installation, the installation event uses that existing file immediately
 - normal pull request labeling does not require `backfill.enabled`
 
 How to backfill existing open pull requests:
@@ -258,7 +264,7 @@ backfill:
   lookback: 720h
 ```
 
-2. If the app is not installed yet, merge that config first and then install the app. The installation event will relabel open pull requests inside the lookback window.
+2. If the app is not installed yet, make sure that config already exists on the default branch and then install the app. The installation event will use that pre-existing file and relabel open pull requests inside the lookback window.
 3. If the app is already installed, merge a pull request that changes `.github/labels.yml` on the default branch with `backfill.enabled: true`. That merge event will relabel open pull requests inside the lookback window.
 4. The app will create any missing size labels as it applies them.
 5. If you only wanted a one-time backfill, merge a follow-up config change that sets `backfill.enabled: false` again after the relabel run you wanted has already happened.

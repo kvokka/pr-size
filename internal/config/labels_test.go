@@ -106,9 +106,15 @@ S:
   name: custom/small
 `
 
-	_, err := LoadLabelsConfig(content)
-	if err == nil {
-		t.Fatal("expected LoadLabelsConfig to reject the legacy flat schema")
+	cfg, warnings, err := LoadLabelsConfigDetailed(content)
+	if err != nil {
+		t.Fatalf("LoadLabelsConfigDetailed returned error: %v", err)
+	}
+	if got := cfg.Labels["S"].Name; got != "size/S" {
+		t.Fatalf("S name = %q, want size/S", got)
+	}
+	if len(warnings) != 1 || warnings[0] != `unsupported top-level key "S" ignored` {
+		t.Fatalf("warnings = %#v, want legacy top-level-key warning", warnings)
 	}
 }
 
@@ -233,21 +239,45 @@ backfill:
 	}
 }
 
-func TestLoadLabelsConfigRejectsUnknownTopLevelKeys(t *testing.T) {
+func TestLoadLabelsConfigDetailedWarnsOnUnknownKeysAndKeepsKnownSettings(t *testing.T) {
 	content := `
+foo: true
 backfill:
-  enabled: false
-labels: {}
-extra: true
+  enabled: true
+  extra: true
+labels:
+  S:
+    name: custom/small
+    extra: true
+  tiny:
+    name: size/tiny
 `
 
-	_, err := LoadLabelsConfig(content)
-	if err == nil {
-		t.Fatal("expected LoadLabelsConfig to reject unknown top-level keys")
+	cfg, warnings, err := LoadLabelsConfigDetailed(content)
+	if err != nil {
+		t.Fatalf("LoadLabelsConfigDetailed returned error: %v", err)
+	}
+	if !cfg.Backfill.Enabled {
+		t.Fatal("expected backfill to remain enabled")
+	}
+	if got := cfg.Labels["S"].Name; got != "custom/small" {
+		t.Fatalf("S name = %q, want custom/small", got)
+	}
+	if got := cfg.Labels["XS"].Name; got != "size/XS" {
+		t.Fatalf("XS name = %q, want size/XS", got)
+	}
+	wantWarnings := []string{
+		`unsupported top-level key "foo" ignored`,
+		`unsupported key "backfill.extra" ignored`,
+		`unsupported key "labels.S.extra" ignored`,
+		`unsupported labels key "labels.tiny" ignored`,
+	}
+	if strings.Join(warnings, "\n") != strings.Join(wantWarnings, "\n") {
+		t.Fatalf("warnings = %#v, want %#v", warnings, wantWarnings)
 	}
 }
 
-func TestLoadLabelsConfigRejectsUnknownLabelKeys(t *testing.T) {
+func TestLoadLabelsConfigIgnoresUnknownLabelKeys(t *testing.T) {
 	content := `
 backfill:
   enabled: false
@@ -256,11 +286,35 @@ labels:
     name: size/tiny
 `
 
-	_, err := LoadLabelsConfig(content)
-	if err == nil {
-		t.Fatal("expected LoadLabelsConfig to reject unknown label keys")
+	cfg, warnings, err := LoadLabelsConfigDetailed(content)
+	if err != nil {
+		t.Fatalf("LoadLabelsConfigDetailed returned error: %v", err)
 	}
-	if err.Error() != `labels.tiny is not a supported size key` {
-		t.Fatalf("error = %q, want %q", err.Error(), `labels.tiny is not a supported size key`)
+	if got := cfg.Labels["XS"].Name; got != "size/XS" {
+		t.Fatalf("XS name = %q, want size/XS", got)
+	}
+	if len(warnings) != 1 || warnings[0] != `unsupported labels key "labels.tiny" ignored` {
+		t.Fatalf("warnings = %#v, want unknown label-key warning", warnings)
+	}
+}
+
+func TestLoadLabelsConfigDetailedIgnoresExactUnknownTopLevelKeyExample(t *testing.T) {
+	content := "backfill:\n  enabled: true\n  lookback: 168h\nololo: foo"
+
+	cfg, warnings, err := LoadLabelsConfigDetailed(content)
+	if err != nil {
+		t.Fatalf("LoadLabelsConfigDetailed returned error: %v", err)
+	}
+	if !cfg.Backfill.Enabled {
+		t.Fatal("expected backfill to remain enabled")
+	}
+	if cfg.Backfill.Lookback != 168*time.Hour {
+		t.Fatalf("backfill lookback = %s, want %s", cfg.Backfill.Lookback, 168*time.Hour)
+	}
+	if got := cfg.Labels["XS"].Name; got != "size/XS" {
+		t.Fatalf("XS name = %q, want size/XS", got)
+	}
+	if len(warnings) != 1 || warnings[0] != `unsupported top-level key "ololo" ignored` {
+		t.Fatalf("warnings = %#v, want unknown top-level-key warning", warnings)
 	}
 }

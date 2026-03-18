@@ -42,6 +42,14 @@ type Repository struct {
 	DefaultBranch string `json:"default_branch"`
 }
 
+type InstallationRepository struct {
+	FullName string `json:"full_name"`
+	Name     string `json:"name"`
+	Owner    struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+}
+
 type IssueComment struct {
 	Body string `json:"body"`
 }
@@ -161,6 +169,39 @@ func (c *Client) GetRepository(ctx context.Context, owner, repo string) (Reposit
 		return Repository{}, err
 	}
 	return repository, nil
+}
+
+func (c *Client) ListInstallationRepositories(ctx context.Context) ([]InstallationRepository, error) {
+	allRepositories := []InstallationRepository{}
+	for page := 1; ; page++ {
+		var payload struct {
+			Repositories []InstallationRepository `json:"repositories"`
+		}
+		endpoint := fmt.Sprintf("installation/repositories?per_page=100&page=%d", page)
+		resp, err := c.do(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			resp.Body.Close()
+			return nil, ErrNotFound
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("GET %s: unexpected status %d", endpoint, resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		hasNext := hasNextPage(resp.Header.Values("Link"), page)
+		resp.Body.Close()
+		allRepositories = append(allRepositories, payload.Repositories...)
+		if !hasNext {
+			break
+		}
+	}
+	return allRepositories, nil
 }
 
 func (c *Client) AddIssueLabels(ctx context.Context, owner, repo string, number int, labels []string) error {

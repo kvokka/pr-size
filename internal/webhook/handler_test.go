@@ -132,10 +132,19 @@ func TestPullRequestOpenedSkipsInvalidLabelsConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
-		if r.URL.RequestURI() != "/repos/acme/widgets/contents/.github/labels.yml?ref=main" {
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse("backfill:\n  enabled: true\n  lookback: 1y\n"))
+		case "/repos/acme/widgets/issues/7/comments?per_page=100&page=1":
+			writeJSON(w, []map[string]any{})
+		case "/repos/acme/widgets/issues/7/comments":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
 		}
-		writeJSON(w, repositoryContentResponse("backfill:\n  enabled: true\n  lookback: 1y\n"))
 	}))
 	defer server.Close()
 
@@ -146,7 +155,120 @@ func TestPullRequestOpenedSkipsInvalidLabelsConfig(t *testing.T) {
 		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
 	}
 	assertNoRequestPath(t, recorded, "/repos/acme/widgets/pulls/7/files?per_page=100&page=1")
-	assertNoMutationRequests(t, recorded)
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", "")
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", "could not load `.github/labels.yml`")
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", `parse backfill.lookback`)
+}
+
+func TestPullRequestOpenedWarnsAndContinuesWhenLabelsConfigContainsUnknownKeys(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse("foo: 42\nlabels:\n  XS:\n    name: custom/small\n    extra: true\n"))
+		case "/repos/acme/widgets/issues/7/comments?per_page=100&page=1":
+			writeJSON(w, []map[string]any{})
+		case "/repos/acme/widgets/issues/7/comments":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+			}
+			w.WriteHeader(http.StatusCreated)
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/custom%2Fsmall":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	resp := serveWebhook(handler, "pull_request", pullRequestPayload("opened", "main", "main", false, 7, nil))
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", "")
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", "ignored unsupported `.github/labels.yml` entries")
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", `unsupported top-level key "foo" ignored`)
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", `unsupported key "labels.XS.extra" ignored`)
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["custom/small"]}`)
+}
+
+func TestPullRequestOpenedWarnsAndContinuesForExactUnknownTopLevelKeyExample(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse("backfill:\n  enabled: true\n  lookback: 168h\nololo: foo"))
+		case "/repos/acme/widgets/issues/7/comments?per_page=100&page=1":
+			writeJSON(w, []map[string]any{})
+		case "/repos/acme/widgets/issues/7/comments":
+			w.WriteHeader(http.StatusCreated)
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	resp := serveWebhook(handler, "pull_request", pullRequestPayload("opened", "main", "main", false, 7, nil))
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/comments", `unsupported top-level key "ololo" ignored`)
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+}
+
+func TestPullRequestOpenedStillLabelsWhenWarningCommentFails(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse("backfill:\n  enabled: true\n  lookback: 168h\nololo: foo"))
+		case "/repos/acme/widgets/issues/7/comments?per_page=100&page=1":
+			w.WriteHeader(http.StatusForbidden)
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	resp := serveWebhook(handler, "pull_request", pullRequestPayload("opened", "main", "main", false, 7, nil))
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
 }
 
 func TestPullRequestLogsFailingStage(t *testing.T) {
@@ -356,6 +478,41 @@ func TestPullRequestOpenedCreatesSelectedRepositoryLabelWhenMissing(t *testing.T
 	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
 }
 
+func TestPullRequestOpenedLabelsDeleteOnlyChange(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(false, "", "")))
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 0, "deletions": 1, "patch": "@@ -1 +0,0 @@\n-old\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	var logs bytes.Buffer
+	handler.logger = log.New(&logs, "", 0)
+
+	resp := serveWebhook(handler, "pull_request", pullRequestPayload("opened", "main", "main", false, 7, nil))
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+	assertLogContains(t, logs.String(), `effective_lines=1 effective_symbols=3 selected_label=size/XS`)
+}
+
 func TestInstallationCreatedBackfillsRecentOpenPullRequestsOnlyWhenEnabledInConfig(t *testing.T) {
 	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
 	recorded := []requestRecord{}
@@ -406,6 +563,49 @@ func TestInstallationCreatedBackfillsRecentOpenPullRequestsOnlyWhenEnabledInConf
 	}
 	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
 	assertNoRequestPath(t, recorded, "/repos/acme/widgets/pulls/6/files?per_page=100&page=1")
+}
+
+func TestInstallationCreatedBackfillsWhenWebhookPayloadRepositoriesAreMissing(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/installation/repositories?per_page=100&page=1":
+			writeJSON(w, map[string]any{
+				"repositories": []map[string]any{{"full_name": "acme/widgets", "name": "widgets", "owner": map[string]any{"login": "acme"}}},
+			})
+		case "/repos/acme/widgets":
+			writeJSON(w, map[string]any{"default_branch": "main"})
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(true, "720h", "")))
+		case "/repos/acme/widgets/pulls?state=open&sort=created&direction=desc&per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"number": 7, "state": "open", "created_at": "2026-03-16T10:00:00Z", "labels": []map[string]any{}, "base": map[string]any{"ref": "main"}}})
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	resp := serveWebhook(handler, "installation", map[string]any{
+		"action":       "created",
+		"installation": map[string]any{"id": 42},
+	})
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodGet, "/installation/repositories?per_page=100&page=1", "")
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
 }
 
 func TestInstallationRepositoriesAddedBackfillsWhenEnabledInConfig(t *testing.T) {
@@ -660,6 +860,53 @@ func TestMergedLabelsYMLChangeDoesNothingWhenLabelsConfigMissing(t *testing.T) {
 	assertNoMutationRequests(t, recorded)
 }
 
+func TestMergedLabelsYMLChangeWarnsOnUnknownKeysAndStillBackfills(t *testing.T) {
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets/pulls/12/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": ".github/labels.yml", "additions": 4, "deletions": 1, "patch": "@@ -1 +1 @@\n-old\n+new\n"}})
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse("foo: 42\nbackfill:\n  enabled: true\nlabels: {}\n"))
+		case "/repos/acme/widgets/issues/12/comments?per_page=100&page=1":
+			writeJSON(w, []map[string]any{})
+		case "/repos/acme/widgets/issues/12/comments":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+			}
+			w.WriteHeader(http.StatusCreated)
+		case "/repos/acme/widgets/pulls?state=open&sort=created&direction=desc&per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"number": 7, "state": "open", "created_at": now.Add(-5 * 24 * time.Hour).Format(time.RFC3339), "labels": []map[string]any{}, "base": map[string]any{"ref": "main"}}})
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	handler.now = func() time.Time { return now }
+
+	resp := serveWebhook(handler, "pull_request", pullRequestPayload("closed", "main", "main", true, 12, nil))
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/12/comments", "")
+	assertRequestBodyContains(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/12/comments", `unsupported top-level key "foo" ignored`)
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+}
+
 func TestPrivateRequestLoggingCanBeEnabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -905,6 +1152,26 @@ func assertContainsRequest(t *testing.T, recorded []requestRecord, method, reque
 		if record.Method == method && record.Path == requestPath {
 			if body != "" && record.Body != body {
 				t.Fatalf("request %s %s body = %s, want %s", method, requestPath, record.Body, body)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing request %s %s", method, requestPath)
+}
+
+func assertRequestBodyContains(t *testing.T, recorded []requestRecord, method, requestPath, fragment string) {
+	t.Helper()
+	for _, record := range recorded {
+		if record.Method == method && record.Path == requestPath {
+			body := record.Body
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(record.Body), &payload); err == nil {
+				if value, ok := payload["body"].(string); ok {
+					body = value
+				}
+			}
+			if !strings.Contains(body, fragment) {
+				t.Fatalf("request %s %s body = %s, want fragment %s", method, requestPath, record.Body, fragment)
 			}
 			return
 		}

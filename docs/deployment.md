@@ -88,7 +88,7 @@ These are GitHub repository secrets because the workflow passes them directly to
 Get them like this:
 
 1. Open `https://github.com/settings/apps/new` and create the GitHub App for this project.
-2. In the app form, enable webhooks and set a webhook secret. Save that exact value as the GitHub repository secret `WEBHOOK_SECRET`. You can use `openssl rand -hex 32` for quick secure secret generation.
+2. In the app form, enable webhooks and set a webhook secret. Save that exact value in the GitHub App settings page for your app, for example `https://github.com/settings/apps/<app-name>`, and also save that same exact value as the GitHub repository secret `WEBHOOK_SECRET`. You can use `openssl rand -hex 32` for quick secure secret generation.
 3. After the app is created, open its settings page and copy the numeric App ID. Save it as the GitHub repository secret `APP_ID`.
 4. On the same settings page, generate a private key and download the `.pem` file. Copy the full file contents into the GitHub repository secret `PRIVATE_KEY`.
 
@@ -98,11 +98,19 @@ In short:
 
 - `APP_ID`: copied from the GitHub App settings page after creation
 - `PRIVATE_KEY`: full contents of the downloaded GitHub App private key `.pem`
-- `WEBHOOK_SECRET`: the secret string you entered in the GitHub App webhook configuration
+- `WEBHOOK_SECRET`: the secret string you entered in the GitHub App webhook configuration and kept in the app settings page
 
 Add all three in GitHub at:
 
 `Settings -> Secrets and variables -> Actions`
+
+For the default deployment, `WEBHOOK_SECRET` must end up in all of these places with the exact same value:
+
+- the GitHub App settings page webhook configuration
+- the GitHub Actions repository secret `WEBHOOK_SECRET`
+- the deployed runtime secret, such as the Hugging Face Space secret `WEBHOOK_SECRET`
+
+Keep that webhook-secret setup documented and reproducible. If you later prepare the app for GitHub Marketplace listing, GitHub's Marketplace requirements still expect the app's webhook-based integration flow to be configured correctly.
 
 At GitHub App creation time, you must also set the App permissions and subscribed event manually in the GitHub UI. Those values are documented in [`docs/github-app.md`](docs/github-app.md).
 
