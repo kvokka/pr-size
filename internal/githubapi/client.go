@@ -51,6 +51,10 @@ type InstallationRepository struct {
 	} `json:"owner"`
 }
 
+type AppInstallation struct {
+	ID int64 `json:"id"`
+}
+
 type IssueComment struct {
 	Body string `json:"body"`
 }
@@ -203,6 +207,37 @@ func (c *Client) ListInstallationRepositories(ctx context.Context) ([]Installati
 		}
 	}
 	return allRepositories, nil
+}
+
+func (c *Client) ListAppInstallations(ctx context.Context) ([]AppInstallation, error) {
+	allInstallations := []AppInstallation{}
+	for page := 1; ; page++ {
+		var installations []AppInstallation
+		endpoint := fmt.Sprintf("app/installations?per_page=100&page=%d", page)
+		resp, err := c.do(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			resp.Body.Close()
+			return nil, ErrNotFound
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("GET %s: unexpected status %d", endpoint, resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&installations); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		hasNext := hasNextPage(resp.Header.Values("Link"), page)
+		resp.Body.Close()
+		allInstallations = append(allInstallations, installations...)
+		if !hasNext {
+			break
+		}
+	}
+	return allInstallations, nil
 }
 
 func (c *Client) AddIssueLabels(ctx context.Context, owner, repo string, number int, labels []string) error {

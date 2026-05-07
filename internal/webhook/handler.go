@@ -27,7 +27,10 @@ var (
 	errLabelsConfigInvalid = errors.New("labels config invalid")
 )
 
-const connectRelabelTimeout = 30 * time.Minute
+const (
+	connectRelabelTimeout = 30 * time.Minute
+	startupRecoveryAction = "startup_recovery"
+)
 
 type labelsConfigInvalidError struct {
 	cause error
@@ -298,30 +301,45 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 	if usedFallback {
 		source = "installation_api"
 	}
+	redactDetails := h.redactStartupRecoveryDetails(event.Action)
 	h.logger.Printf("connect_relabel event=%q action=%q repositories=%d source=%s", eventName, event.Action, len(repositories), source)
 	failures := make([]error, 0)
 	for _, repository := range repositories {
 		owner, repo, err := repository.ownerAndRepo()
 		if err != nil {
-			h.logger.Printf("connect_relabel skipped repository_payload_invalid=true error=%v", err)
+			if redactDetails {
+				h.logger.Printf("connect_relabel skipped repository_payload_invalid=true")
+			} else {
+				h.logger.Printf("connect_relabel skipped repository_payload_invalid=true error=%v", err)
+			}
 			failures = append(failures, err)
 			continue
 		}
 		labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, repository.DefaultBranch)
 		if err != nil {
-			if h.logConnectLabelsConfigSkip(owner, repo, configRef, err) {
+			if h.logConnectLabelsConfigSkip(owner, repo, configRef, err, redactDetails) {
 				continue
 			}
 			err = fmt.Errorf("load labels config for %s/%s: %w", owner, repo, err)
-			h.logger.Printf("connect_relabel repository=%s/%s failed labels_config error=%v", owner, repo, err)
+			if redactDetails {
+				h.logger.Printf("connect_relabel failed labels_config")
+			} else {
+				h.logger.Printf("connect_relabel repository=%s/%s failed labels_config error=%v", owner, repo, err)
+			}
 			failures = append(failures, err)
 			continue
 		}
 		if len(warnings) > 0 {
-			h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s ignored_labels_config_warnings=%q", owner, repo, safeBranch(configRef), strings.Join(warnings, "; "))
+			if redactDetails {
+				h.logger.Printf("connect_relabel ignored_labels_config_warnings=%d", len(warnings))
+			} else {
+				h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s ignored_labels_config_warnings=%q", owner, repo, safeBranch(configRef), strings.Join(warnings, "; "))
+			}
 		}
 		if !labelsConfig.Backfill.Enabled {
-			if usedDefaults {
+			if redactDetails {
+				h.logger.Printf("connect_relabel skipped backfill_enabled=false")
+			} else if usedDefaults {
 				h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s skipped backfill_enabled=false labels_config=built_in_defaults", owner, repo, configRef)
 			} else {
 				h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s skipped backfill_enabled=false", owner, repo, configRef)
@@ -330,7 +348,11 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 		}
 		if err := h.relabelOpenPullRequests(ctx, client, event.Installation.ID, owner, repo, event.Action, labelsConfig.Labels, labelsConfig.Backfill.Lookback); err != nil {
 			err = fmt.Errorf("relabel open pull requests for %s/%s: %w", owner, repo, err)
-			h.logger.Printf("connect_relabel repository=%s/%s failed open_pr_relabel error=%v", owner, repo, err)
+			if redactDetails {
+				h.logger.Printf("connect_relabel failed open_pr_relabel")
+			} else {
+				h.logger.Printf("connect_relabel repository=%s/%s failed open_pr_relabel error=%v", owner, repo, err)
+			}
 			failures = append(failures, err)
 			continue
 		}
@@ -339,6 +361,13 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 		return fmt.Errorf("connect relabel failed for %d of %d repositories: %w", len(failures), len(repositories), errors.Join(failures...))
 	}
 	return nil
+}
+
+func (h *Handler) RecoverInstallation(ctx context.Context, installationID int64) error {
+	var event installationEvent
+	event.Action = startupRecoveryAction
+	event.Installation.ID = installationID
+	return h.handleConnectEvent(ctx, "installation", event)
 }
 
 func (h *Handler) relabelOpenPullRequests(ctx context.Context, client *githubapi.Client, installationID int64, owner, repo, action string, labelSet labels.Set, lookback time.Duration) error {
@@ -373,7 +402,11 @@ func (h *Handler) relabelOpenPullRequests(ctx context.Context, client *githubapi
 		}
 		processed++
 	}
-	h.logger.Printf("open_pr_relabel repository=%s/%s processed=%d listed=%d lookback=%s cutoff=%s", owner, repo, processed, len(pullRequests), lookback, cutoff.Format(time.RFC3339))
+	if h.redactStartupRecoveryDetails(action) {
+		h.logger.Printf("open_pr_relabel processed=%d listed=%d", processed, len(pullRequests))
+	} else {
+		h.logger.Printf("open_pr_relabel repository=%s/%s processed=%d listed=%d lookback=%s cutoff=%s", owner, repo, processed, len(pullRequests), lookback, cutoff.Format(time.RFC3339))
+	}
 	return nil
 }
 
@@ -623,12 +656,20 @@ func (h *Handler) logPullRequestLabelsConfigSkip(target pullRequestTarget, defau
 	return false
 }
 
-func (h *Handler) logConnectLabelsConfigSkip(owner, repo, defaultBranch string, err error) bool {
+func (h *Handler) logConnectLabelsConfigSkip(owner, repo, defaultBranch string, err error, redactDetails bool) bool {
 	if errors.Is(err, errLabelsConfigInvalid) {
-		h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s skipped labels_config_invalid=true error=%v", owner, repo, safeBranch(defaultBranch), err)
+		if redactDetails {
+			h.logger.Printf("connect_relabel skipped labels_config_invalid=true")
+		} else {
+			h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s skipped labels_config_invalid=true error=%v", owner, repo, safeBranch(defaultBranch), err)
+		}
 		return true
 	}
 	return false
+}
+
+func (h *Handler) redactStartupRecoveryDetails(action string) bool {
+	return action == startupRecoveryAction && !h.logPrivate
 }
 
 func (h *Handler) logLabelsConfigLoaded(target pullRequestTarget, defaultBranch string, labelCount int, usedDefaults bool) {
@@ -797,6 +838,10 @@ func (h *Handler) logPullRequestTargetFailure(target pullRequestTarget, stage st
 	if h.logger == nil {
 		return
 	}
+	if h.redactStartupRecoveryDetails(target.Action) {
+		h.logger.Printf("pull_request stage=%s action=%q %s error=redacted", stage, target.Action, h.pullRequestTargetLogContext(target))
+		return
+	}
 	h.logger.Printf("pull_request stage=%s action=%q %s error=%v", stage, target.Action, h.pullRequestTargetLogContext(target), err)
 }
 
@@ -809,6 +854,9 @@ func (h *Handler) pullRequestLogContext(event pullRequestEvent) string {
 }
 
 func (h *Handler) pullRequestTargetLogContext(target pullRequestTarget) string {
+	if h.redactStartupRecoveryDetails(target.Action) {
+		return "repo=redacted pr_number=redacted"
+	}
 	context := fmt.Sprintf("repo=%s/%s pr_number=%d", target.Owner, target.Repo, target.Number)
 	if h.logPrivate {
 		return fmt.Sprintf("installation_id=%d %s", target.InstallationID, context)

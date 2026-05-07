@@ -52,7 +52,7 @@ No extra credentials are required for startup recovery beyond the existing GitHu
 - `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED=true`
 - `STARTUP_FAILED_DELIVERY_RECOVERY_LOOKBACK=2h`
 
-The app uses its existing GitHub App credentials to list recent GitHub App webhook deliveries on startup and redeliver only failed deliveries within the configured lookback period.
+The app uses its existing GitHub App credentials to list recent GitHub App webhook deliveries on startup and redeliver only failed deliveries within the configured lookback period. It also lists current GitHub App installations and reruns repository connect backfill, so installed repositories with default-branch `.github/labels.yml` backfill enabled are recovered after a restart without disconnecting and reconnecting the app.
 
 #### `HUGGINGFACE_SPACE`
 

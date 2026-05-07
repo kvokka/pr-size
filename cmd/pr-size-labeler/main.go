@@ -46,9 +46,10 @@ func main() {
 	recoveryRunner := recovery.NewStartupRecovery(
 		log.Default(),
 		tokenProvider,
-		func(token string) recovery.DeliveryClient {
+		func(token string) recovery.AppClient {
 			return githubapi.NewClient(env.GitHubAPIBaseURL, token, outboundClient)
 		},
+		handler,
 	)
 
 	server := &http.Server{
@@ -65,7 +66,7 @@ func main() {
 	}()
 	go func() {
 		if err := recoveryRunner.Run(context.Background(), env); err != nil {
-			log.Printf("startup failed-delivery recovery skipped after error: %v", err)
+			log.Printf("startup recovery failed after error: %v", err)
 		}
 	}()
 

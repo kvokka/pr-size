@@ -124,6 +124,35 @@ func TestListInstallationRepositoriesPaginates(t *testing.T) {
 	}
 }
 
+func TestListAppInstallationsPaginates(t *testing.T) {
+	var baseURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.RequestURI() {
+		case "/app/installations?per_page=100&page=1":
+			w.Header().Add("Link", `<`+baseURL+`/app/installations?per_page=100&page=2>; rel="next"`)
+			writeJSON(w, []map[string]any{{"id": 42}})
+		case "/app/installations?per_page=100&page=2":
+			writeJSON(w, []map[string]any{{"id": 84}})
+		default:
+			t.Fatalf("unexpected request %s", r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	client := NewClient(server.URL+"/", "test-token", server.Client())
+	installations, err := client.ListAppInstallations(context.Background())
+	if err != nil {
+		t.Fatalf("ListAppInstallations returned error: %v", err)
+	}
+	if len(installations) != 2 {
+		t.Fatalf("expected 2 installations, got %d", len(installations))
+	}
+	if installations[0].ID != 42 || installations[1].ID != 84 {
+		t.Fatalf("unexpected installations: %+v", installations)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {

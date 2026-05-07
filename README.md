@@ -214,7 +214,7 @@ Optionally add `.github/labels.yml` on the default branch if you want custom thr
 
 ### Startup recovery for missed failed deliveries
 
-If you deploy on Hugging Face Spaces, rebuilds and restarts can make the webhook endpoint temporarily unavailable. `pr-size-labeler` can optionally try to recover from that on process startup by listing recent **failed** GitHub App webhook deliveries and asking GitHub to redeliver them.
+If you deploy on Hugging Face Spaces, rebuilds and restarts can make the webhook endpoint temporarily unavailable. `pr-size-labeler` can optionally try to recover from that on process startup by listing recent **failed** GitHub App webhook deliveries and asking GitHub to redeliver them. It also lists current GitHub App installations and reruns the normal repository connect flow, so repositories with `.github/labels.yml` backfill enabled do not need to be reconnected after a restart.
 
 For this repository's default GitHub Actions → Hugging Face deployment, startup recovery is enabled automatically. The code-level default is still `false`, but the deploy workflow sets `STARTUP_FAILED_DELIVERY_RECOVERY_ENABLED=true` for the Space.
 
@@ -235,6 +235,7 @@ Behavior notes:
 
 - this runs **once on startup**, not on a schedule
 - the HTTP server starts first, then recovery runs in the background so redeliveries can reach a live process
+- current GitHub App installations are listed on startup, and each installation's accessible repositories are checked through the same `.github/labels.yml` connect-time backfill behavior used on app install
 - it only looks at deliveries inside the configured lookback window
 - it only redelivers deliveries whose GitHub delivery `status` is not `OK`
 - repeated restarts inside the same lookback window can cause the same failed original delivery to be redelivered again

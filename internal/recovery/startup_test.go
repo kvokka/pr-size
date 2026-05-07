@@ -24,7 +24,9 @@ func (f fakeAppTokenSource) AppToken(context.Context) (string, error) {
 
 type fakeDeliveryClient struct {
 	deliveries            []githubapi.AppHookDelivery
+	installations         []githubapi.AppInstallation
 	listErr               error
+	listInstallationsErr  error
 	redeliveryErrByID     map[int64]error
 	requestedCutoff       time.Time
 	redeliveredDeliveries []int64
@@ -43,15 +45,32 @@ func (f *fakeDeliveryClient) RedeliverAppHookDelivery(_ context.Context, deliver
 	return nil
 }
 
+func (f *fakeDeliveryClient) ListAppInstallations(context.Context) ([]githubapi.AppInstallation, error) {
+	return f.installations, f.listInstallationsErr
+}
+
+type fakeInstallationRecoverer struct {
+	recovered []int64
+	errByID   map[int64]error
+}
+
+func (f *fakeInstallationRecoverer) RecoverInstallation(_ context.Context, installationID int64) error {
+	f.recovered = append(f.recovered, installationID)
+	if err, ok := f.errByID[installationID]; ok {
+		return err
+	}
+	return nil
+}
+
 func TestStartupRecoveryDisabled(t *testing.T) {
 	client := &fakeDeliveryClient{}
 	var logs bytes.Buffer
-	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) DeliveryClient {
+	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) AppClient {
 		if token != "app-jwt" {
 			t.Fatalf("unexpected token %q", token)
 		}
 		return client
-	})
+	}, nil)
 
 	err := runner.Run(context.Background(), config.Env{StartupFailedDeliveryRecoveryEnabled: false, StartupFailedDeliveryRecoveryLookback: 2 * time.Hour})
 	if err != nil {
@@ -76,12 +95,12 @@ func TestStartupRecoveryRedeliversFailedOnly(t *testing.T) {
 		redeliveryErrByID: map[int64]error{3: errors.New("boom")},
 	}
 	var logs bytes.Buffer
-	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) DeliveryClient {
+	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) AppClient {
 		if token != "app-jwt" {
 			t.Fatalf("unexpected token %q", token)
 		}
 		return client
-	})
+	}, nil)
 	runner.now = func() time.Time { return now }
 
 	err := runner.Run(context.Background(), config.Env{StartupFailedDeliveryRecoveryEnabled: true, StartupFailedDeliveryRecoveryLookback: 2 * time.Hour, LogPrivateDetails: true})
@@ -113,12 +132,12 @@ func TestStartupRecoveryRedactsDeliveryDetailsByDefault(t *testing.T) {
 		deliveries: []githubapi.AppHookDelivery{{ID: 2, Status: "INVALID_HTTP_RESPONSE", Event: "pull_request", Action: "opened", DeliveredAt: now.Add(-20 * time.Minute)}},
 	}
 	var logs bytes.Buffer
-	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) DeliveryClient {
+	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) AppClient {
 		if token != "app-jwt" {
 			t.Fatalf("unexpected token %q", token)
 		}
 		return client
-	})
+	}, nil)
 	runner.now = func() time.Time { return now }
 
 	err := runner.Run(context.Background(), config.Env{StartupFailedDeliveryRecoveryEnabled: true, StartupFailedDeliveryRecoveryLookback: 2 * time.Hour, LogPrivateDetails: false})
@@ -137,6 +156,69 @@ func TestStartupRecoveryRedactsDeliveryDetailsByDefault(t *testing.T) {
 	for _, forbidden := range []string{"lookback=", "cutoff=", "delivery_id=2", `event="pull_request"`, `action="opened"`, "status=", "delivered_at="} {
 		if strings.Contains(logs.String(), forbidden) {
 			t.Fatalf("expected logs not to contain %q, got %s", forbidden, logs.String())
+		}
+	}
+}
+
+func TestStartupRecoveryRecoversInstallationsWhenNoDeliveriesWereListed(t *testing.T) {
+	client := &fakeDeliveryClient{
+		installations: []githubapi.AppInstallation{{ID: 42}, {ID: 84}},
+	}
+	recoverer := &fakeInstallationRecoverer{errByID: map[int64]error{84: errors.New("recover boom")}}
+	var logs bytes.Buffer
+	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) AppClient {
+		if token != "app-jwt" {
+			t.Fatalf("unexpected token %q", token)
+		}
+		return client
+	}, recoverer)
+
+	err := runner.Run(context.Background(), config.Env{StartupFailedDeliveryRecoveryEnabled: true, StartupFailedDeliveryRecoveryLookback: 2 * time.Hour, LogPrivateDetails: true})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(recoverer.recovered) != 2 || recoverer.recovered[0] != 42 || recoverer.recovered[1] != 84 {
+		t.Fatalf("unexpected recovered installations: %v", recoverer.recovered)
+	}
+	for _, want := range []string{
+		"startup_failed_delivery_recovery summary listed=0 failed=0 redelivered=0 redelivery_failures=0",
+		"startup_installation_recovery installation_id=42 recovered=true",
+		"startup_installation_recovery installation_id=84 recovered=false error=recover boom",
+		"startup_installation_recovery summary listed=2 recovered=1 failures=1",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("expected logs to contain %q, got %s", want, logs.String())
+		}
+	}
+}
+
+func TestStartupRecoveryStillRecoversInstallationsWhenDeliveryListingFails(t *testing.T) {
+	client := &fakeDeliveryClient{
+		installations: []githubapi.AppInstallation{{ID: 42}},
+		listErr:       errors.New("deliveries unavailable"),
+	}
+	recoverer := &fakeInstallationRecoverer{}
+	var logs bytes.Buffer
+	runner := NewStartupRecovery(log.New(&logs, "", 0), fakeAppTokenSource{token: "app-jwt"}, func(token string) AppClient {
+		if token != "app-jwt" {
+			t.Fatalf("unexpected token %q", token)
+		}
+		return client
+	}, recoverer)
+
+	err := runner.Run(context.Background(), config.Env{StartupFailedDeliveryRecoveryEnabled: true, StartupFailedDeliveryRecoveryLookback: 2 * time.Hour})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(recoverer.recovered) != 1 || recoverer.recovered[0] != 42 {
+		t.Fatalf("unexpected recovered installations: %v", recoverer.recovered)
+	}
+	for _, want := range []string{
+		"startup_failed_delivery_recovery skipped after error: deliveries unavailable",
+		"startup_installation_recovery summary listed=1 recovered=1 failures=0",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("expected logs to contain %q, got %s", want, logs.String())
 		}
 	}
 }
