@@ -43,9 +43,10 @@ type Repository struct {
 }
 
 type InstallationRepository struct {
-	FullName string `json:"full_name"`
-	Name     string `json:"name"`
-	Owner    struct {
+	FullName      string `json:"full_name"`
+	Name          string `json:"name"`
+	DefaultBranch string `json:"default_branch"`
+	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 }

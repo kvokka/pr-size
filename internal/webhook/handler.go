@@ -94,9 +94,10 @@ type pullRequestTarget struct {
 }
 
 type installationRepository struct {
-	FullName string `json:"full_name"`
-	Name     string `json:"name"`
-	Owner    struct {
+	FullName      string `json:"full_name"`
+	Name          string `json:"name"`
+	DefaultBranch string `json:"default_branch"`
+	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 }
@@ -306,7 +307,7 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 			failures = append(failures, err)
 			continue
 		}
-		labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, "")
+		labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, repository.DefaultBranch)
 		if err != nil {
 			if h.logConnectLabelsConfigSkip(owner, repo, configRef, err) {
 				continue
@@ -554,6 +555,7 @@ func (h *Handler) resolveConnectRepositories(ctx context.Context, client *github
 		var converted installationRepository
 		converted.FullName = repository.FullName
 		converted.Name = repository.Name
+		converted.DefaultBranch = repository.DefaultBranch
 		converted.Owner.Login = repository.Owner.Login
 		repositories = append(repositories, converted)
 	}

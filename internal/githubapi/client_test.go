@@ -95,7 +95,7 @@ func TestListInstallationRepositoriesPaginates(t *testing.T) {
 		case "/installation/repositories?per_page=100&page=1":
 			w.Header().Add("Link", `<`+baseURL+`/installation/repositories?per_page=100&page=2>; rel="next"`)
 			writeJSON(w, map[string]any{
-				"repositories": []map[string]any{{"full_name": "acme/widgets", "name": "widgets", "owner": map[string]any{"login": "acme"}}},
+				"repositories": []map[string]any{{"full_name": "acme/widgets", "name": "widgets", "default_branch": "main", "owner": map[string]any{"login": "acme"}}},
 			})
 		case "/installation/repositories?per_page=100&page=2":
 			writeJSON(w, map[string]any{
@@ -118,6 +118,9 @@ func TestListInstallationRepositoriesPaginates(t *testing.T) {
 	}
 	if repositories[0].FullName != "acme/widgets" || repositories[1].FullName != "acme/api" {
 		t.Fatalf("unexpected repositories: %+v", repositories)
+	}
+	if repositories[0].DefaultBranch != "main" {
+		t.Fatalf("default branch = %q, want main", repositories[0].DefaultBranch)
 	}
 }
 

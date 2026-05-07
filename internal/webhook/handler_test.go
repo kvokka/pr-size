@@ -611,6 +611,60 @@ func TestInstallationCreatedBackfillsWhenWebhookPayloadRepositoriesAreMissing(t 
 	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
 }
 
+func TestInstallationRepositoriesAddedAllSelectionBackfillsUsingInstallationRepositoryDefaultBranch(t *testing.T) {
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/installation/repositories?per_page=100&page=1":
+			writeJSON(w, map[string]any{
+				"repository_selection": "all",
+				"repositories": []map[string]any{{
+					"full_name":      "acme/widgets",
+					"name":           "widgets",
+					"default_branch": "main",
+					"owner":          map[string]any{"login": "acme"},
+				}},
+			})
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(true, "720h", "")))
+		case "/repos/acme/widgets/pulls?state=open&sort=created&direction=desc&per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"number": 7, "state": "open", "created_at": "2026-03-16T10:00:00Z", "labels": []map[string]any{}, "base": map[string]any{"ref": "main"}}})
+		case "/repos/acme/widgets/pulls/7/files?per_page=100&page=1":
+			writeJSON(w, []map[string]any{{"filename": "internal/service.go", "additions": 1, "deletions": 0, "patch": "@@ -0,0 +1 @@\n+ok\n"}})
+		case "/repos/acme/widgets/contents/.gitattributes?ref=main":
+			w.WriteHeader(http.StatusNotFound)
+		case "/repos/acme/widgets/labels/size%2FXS":
+			w.WriteHeader(http.StatusOK)
+		case "/repos/acme/widgets/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	handler.now = func() time.Time { return now }
+	resp := serveWebhook(handler, "installation_repositories", map[string]any{
+		"action":               "added",
+		"installation":         map[string]any{"id": 42},
+		"repository_selection": "all",
+		"repositories_added":   []map[string]any{},
+		"repositories_removed": []map[string]any{},
+	})
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodGet, "/installation/repositories?per_page=100&page=1", "")
+	assertNoRequestPath(t, recorded, "/repos/acme/widgets")
+	assertContainsRequest(t, recorded, http.MethodGet, "/repos/acme/widgets/contents/.github/labels.yml?ref=main", "")
+	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+}
+
 func TestInstallationRepositoriesAddedBackfillsWhenEnabledInConfig(t *testing.T) {
 	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
 	recorded := []requestRecord{}
