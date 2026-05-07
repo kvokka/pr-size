@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -566,6 +567,7 @@ func TestInstallationCreatedBackfillsRecentOpenPullRequestsOnlyWhenEnabledInConf
 }
 
 func TestInstallationCreatedBackfillsWhenWebhookPayloadRepositoriesAreMissing(t *testing.T) {
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
 	recorded := []requestRecord{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -596,6 +598,7 @@ func TestInstallationCreatedBackfillsWhenWebhookPayloadRepositoriesAreMissing(t 
 	defer server.Close()
 
 	handler := newTestHandler(server, false)
+	handler.now = func() time.Time { return now }
 	resp := serveWebhook(handler, "installation", map[string]any{
 		"action":       "created",
 		"installation": map[string]any{"id": 42},
@@ -609,6 +612,7 @@ func TestInstallationCreatedBackfillsWhenWebhookPayloadRepositoriesAreMissing(t 
 }
 
 func TestInstallationRepositoriesAddedBackfillsWhenEnabledInConfig(t *testing.T) {
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)
 	recorded := []requestRecord{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -635,6 +639,7 @@ func TestInstallationRepositoriesAddedBackfillsWhenEnabledInConfig(t *testing.T)
 	defer server.Close()
 
 	handler := newTestHandler(server, false)
+	handler.now = func() time.Time { return now }
 	resp := serveWebhook(handler, "installation_repositories", map[string]any{
 		"action":             "added",
 		"installation":       map[string]any{"id": 42},
@@ -645,6 +650,80 @@ func TestInstallationRepositoriesAddedBackfillsWhenEnabledInConfig(t *testing.T)
 		t.Fatalf("ServeHTTP status = %d, want 200; body=%s", resp.Code, resp.Body.String())
 	}
 	assertContainsRequest(t, recorded, http.MethodPost, "/repos/acme/widgets/issues/7/labels", `{"labels":["size/XS"]}`)
+}
+
+func TestInstallationRepositoriesAddedContinuesAfterRepositoryFailure(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/broken":
+			writeJSON(w, map[string]any{"default_branch": "main"})
+		case "/repos/acme/broken/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(true, "168h", "")))
+		case "/repos/acme/broken/pulls?state=open&sort=created&direction=desc&per_page=100&page=1":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/repos/acme/after-broken":
+			writeJSON(w, map[string]any{"default_branch": "main"})
+		case "/repos/acme/after-broken/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(false, "", "")))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	var logs bytes.Buffer
+	handler.logger = log.New(&logs, "", 0)
+
+	resp := serveWebhook(handler, "installation_repositories", map[string]any{
+		"action":       "added",
+		"installation": map[string]any{"id": 42},
+		"repositories_added": []map[string]any{
+			{"full_name": "acme/broken", "name": "broken"},
+			{"full_name": "acme/after-broken", "name": "after-broken"},
+		},
+	})
+
+	if resp.Code != http.StatusBadGateway {
+		t.Fatalf("ServeHTTP status = %d, want 502; body=%s", resp.Code, resp.Body.String())
+	}
+	assertContainsRequest(t, recorded, http.MethodGet, "/repos/acme/after-broken", "")
+	assertContainsRequest(t, recorded, http.MethodGet, "/repos/acme/after-broken/contents/.github/labels.yml?ref=main", "")
+	assertLogContains(t, logs.String(), `connect_relabel repository=acme/broken failed open_pr_relabel error=`)
+	assertLogContains(t, logs.String(), `connect_relabel repository=acme/after-broken default_branch=main skipped backfill_enabled=false`)
+}
+
+func TestInstallationRepositoriesAddedContinuesAfterRequestContextCancellation(t *testing.T) {
+	recorded := []requestRecord{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		recorded = append(recorded, requestRecord{Method: r.Method, Path: r.URL.RequestURI(), Body: string(body)})
+		switch r.URL.RequestURI() {
+		case "/repos/acme/widgets":
+			writeJSON(w, map[string]any{"default_branch": "main"})
+		case "/repos/acme/widgets/contents/.github/labels.yml?ref=main":
+			writeJSON(w, repositoryContentResponse(labelsConfigYAML(false, "", "")))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	handler := newTestHandler(server, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	event := installationEvent{Action: "added"}
+	event.Installation.ID = 42
+	event.RepositoriesAdded = []installationRepository{{FullName: "acme/widgets", Name: "widgets"}}
+
+	if err := handler.handleConnectEvent(ctx, "installation_repositories", event); err != nil {
+		t.Fatalf("handleConnectEvent() error = %v, want nil", err)
+	}
+	assertContainsRequest(t, recorded, http.MethodGet, "/repos/acme/widgets", "")
+	assertContainsRequest(t, recorded, http.MethodGet, "/repos/acme/widgets/contents/.github/labels.yml?ref=main", "")
 }
 
 func TestInstallationCreatedDoesNothingWhenBackfillDisabledInConfig(t *testing.T) {

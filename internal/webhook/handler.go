@@ -27,6 +27,8 @@ var (
 	errLabelsConfigInvalid = errors.New("labels config invalid")
 )
 
+const connectRelabelTimeout = 30 * time.Minute
+
 type labelsConfigInvalidError struct {
 	cause error
 }
@@ -279,6 +281,8 @@ func (h *Handler) handleMergedLabelsConfigChange(ctx context.Context, client *gi
 }
 
 func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, event installationEvent) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectRelabelTimeout)
+	defer cancel()
 	token, err := h.tokenProvider.Token(ctx, event.Installation.ID)
 	if err != nil {
 		return fmt.Errorf("create installation token: %w", err)
@@ -294,17 +298,23 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 		source = "installation_api"
 	}
 	h.logger.Printf("connect_relabel event=%q action=%q repositories=%d source=%s", eventName, event.Action, len(repositories), source)
+	failures := make([]error, 0)
 	for _, repository := range repositories {
 		owner, repo, err := repository.ownerAndRepo()
 		if err != nil {
-			return err
+			h.logger.Printf("connect_relabel skipped repository_payload_invalid=true error=%v", err)
+			failures = append(failures, err)
+			continue
 		}
 		labelsConfig, configRef, usedDefaults, warnings, err := h.loadRepositoryLabelsConfig(ctx, client, owner, repo, "")
 		if err != nil {
 			if h.logConnectLabelsConfigSkip(owner, repo, configRef, err) {
 				continue
 			}
-			return err
+			err = fmt.Errorf("load labels config for %s/%s: %w", owner, repo, err)
+			h.logger.Printf("connect_relabel repository=%s/%s failed labels_config error=%v", owner, repo, err)
+			failures = append(failures, err)
+			continue
 		}
 		if len(warnings) > 0 {
 			h.logger.Printf("connect_relabel repository=%s/%s default_branch=%s ignored_labels_config_warnings=%q", owner, repo, safeBranch(configRef), strings.Join(warnings, "; "))
@@ -318,8 +328,14 @@ func (h *Handler) handleConnectEvent(ctx context.Context, eventName string, even
 			continue
 		}
 		if err := h.relabelOpenPullRequests(ctx, client, event.Installation.ID, owner, repo, event.Action, labelsConfig.Labels, labelsConfig.Backfill.Lookback); err != nil {
-			return err
+			err = fmt.Errorf("relabel open pull requests for %s/%s: %w", owner, repo, err)
+			h.logger.Printf("connect_relabel repository=%s/%s failed open_pr_relabel error=%v", owner, repo, err)
+			failures = append(failures, err)
+			continue
 		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("connect relabel failed for %d of %d repositories: %w", len(failures), len(repositories), errors.Join(failures...))
 	}
 	return nil
 }
